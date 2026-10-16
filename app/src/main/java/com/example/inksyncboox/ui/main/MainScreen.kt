@@ -115,11 +115,15 @@ fun MainScreen(
         onDispose { pdfEngine.close() }
     }
 
-    // Initialize built-in Note Air 4C showcase PDF on first launch
+    // Initialize built-in Note Air 4C showcase PDF on first launch ONLY if no external file intent was passed
     LaunchedEffect(pdfEngine) {
-        val count = pdfEngine.ensureSampleOrOpenPdf(null)
-        viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count)
-        renderedBitmap = pdfEngine.renderPage(0)
+        if (viewModel.incomingFileUri.value == null) {
+            val count = pdfEngine.ensureSampleOrOpenPdf(null)
+            if (viewModel.incomingFileUri.value == null) {
+                viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count)
+                renderedBitmap = pdfEngine.renderPage(0)
+            }
+        }
     }
 
     // Re-render page when pageIndex changes
@@ -140,35 +144,39 @@ fun MainScreen(
     val incomingUri by viewModel.incomingFileUri.collectAsStateWithLifecycle()
 
     suspend fun loadAnyRealDocumentUri(uri: android.net.Uri) {
-        val fileName = pdfEngine.resolveDisplayName(uri)
-        val lowerName = fileName.lowercase()
-        val mime = context.contentResolver.getType(uri)?.lowercase().orEmpty()
+        try {
+            val fileName = pdfEngine.resolveDisplayName(uri)
+            val lowerName = fileName.lowercase()
+            val mime = context.contentResolver.getType(uri)?.lowercase().orEmpty()
 
-        when {
-            lowerName.endsWith(".epub") || mime.contains("epub") -> {
-                val parsedBook = com.example.inksyncboox.epub.RealEpubParser.parseEpubFromUri(
-                    context = context,
-                    uri = uri,
-                    fallbackFileName = fileName
-                )
-                if (parsedBook != null) {
-                    viewModel.loadImportedEpubBook(parsedBook)
+            when {
+                lowerName.endsWith(".epub") || mime.contains("epub") -> {
+                    val parsedBook = com.example.inksyncboox.epub.RealEpubParser.parseEpubFromUri(
+                        context = context,
+                        uri = uri,
+                        fallbackFileName = fileName
+                    )
+                    if (parsedBook != null) {
+                        viewModel.loadImportedEpubBook(parsedBook)
+                    }
+                }
+                lowerName.endsWith(".cbz") || lowerName.endsWith(".zip") || mime.contains("cbz") || mime.contains("comicbook") -> {
+                    val count = pdfEngine.openCbzArchive(uri)
+                    if (count > 0) {
+                        viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count, isCbz = true)
+                        renderedBitmap = pdfEngine.renderPage(0)
+                    }
+                }
+                else -> {
+                    val count = pdfEngine.ensureSampleOrOpenPdf(uri)
+                    if (count > 0) {
+                        viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count, isCbz = false)
+                        renderedBitmap = pdfEngine.renderPage(0)
+                    }
                 }
             }
-            lowerName.endsWith(".cbz") || lowerName.endsWith(".zip") || mime.contains("cbz") || mime.contains("comicbook") -> {
-                val count = pdfEngine.openCbzArchive(uri)
-                if (count > 0) {
-                    viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count, isCbz = true)
-                    renderedBitmap = pdfEngine.renderPage(0)
-                }
-            }
-            else -> {
-                val count = pdfEngine.ensureSampleOrOpenPdf(uri)
-                if (count > 0) {
-                    viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count, isCbz = false)
-                    renderedBitmap = pdfEngine.renderPage(0)
-                }
-            }
+        } catch (e: Throwable) {
+            viewModel.updateSidecarExportStatus("File Access Notice: ${e.localizedMessage ?: "Use SAF Picker"}")
         }
     }
 
