@@ -163,6 +163,13 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
     private val _readerState = MutableStateFlow(BooxReaderState())
     val readerState: StateFlow<BooxReaderState> = _readerState.asStateFlow()
 
+    private val _incomingFileUri = MutableStateFlow<android.net.Uri?>(null)
+    val incomingFileUri: StateFlow<android.net.Uri?> = _incomingFileUri.asStateFlow()
+
+    fun setIncomingFileUri(uri: android.net.Uri?) {
+        _incomingFileUri.value = uri
+    }
+
     fun selectWorkspaceMode(mode: BooxWorkspaceMode) {
         _readerState.update { state ->
             state.copy(
@@ -235,13 +242,32 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
         }
     }
 
-    fun updateDocumentMetadata(title: String, pageCount: Int) {
+    fun updateDocumentMetadata(title: String, pageCount: Int, isCbz: Boolean = false) {
         _readerState.update { state ->
             state.copy(
+                workspaceMode = BooxWorkspaceMode.PDF_NEOFLOW,
                 documentTitle = title,
                 pageCount = pageCount.coerceAtLeast(1),
                 pageIndex = 0,
-                activeStepIndex = 0
+                activeStepIndex = 0,
+                traversalFlow = if (isCbz) BooxTraversalFlow.REVERSE_Z else state.traversalFlow,
+                lastStylusTelemetry = if (isCbz) {
+                    "Loaded Real .CBZ Archive ($pageCount pages) · Reverse-Z Manga Ready"
+                } else {
+                    "Loaded Real .PDF ($pageCount pages) · NeoFlow Matrix Ready"
+                }
+            )
+        }
+    }
+
+    fun loadImportedEpubBook(book: EpubBookDocument) {
+        _readerState.update { state ->
+            state.copy(
+                workspaceMode = BooxWorkspaceMode.KINDLE_EPUB,
+                activeEpubBook = book,
+                epubChapterIndex = 0,
+                regalFlashTick = state.regalFlashTick + 1,
+                lastStylusTelemetry = "Loaded Real .EPUB (${book.chapters.size} chapters) · 300 PPI Reflow"
             )
         }
     }

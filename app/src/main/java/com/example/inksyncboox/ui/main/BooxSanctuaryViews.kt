@@ -250,7 +250,7 @@ fun BooxSanctuaryShelfView(
                         onClick = { onSelectMode(BooxWorkspaceMode.PDF_NEOFLOW) }
                     )
                     SanctuaryPillButton(
-                        label = "Open Local PDF…",
+                        label = "Open .PDF / .EPUB / .CBZ…",
                         isPrimary = false,
                         onClick = onOpenLocalPdf
                     )

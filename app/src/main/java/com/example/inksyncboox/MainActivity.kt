@@ -1,5 +1,7 @@
 package com.example.inksyncboox
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -15,6 +17,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.example.inksyncboox.data.DefaultDataRepository
 import com.example.inksyncboox.theme.InkSyncBooxTheme
 import com.example.inksyncboox.ui.main.MainScreenViewModel
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -29,6 +32,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIncomingIntent(intent)
 
         enableEdgeToEdge()
         setContent {
@@ -38,6 +42,26 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     MainNavigation(viewModel = mainViewModel)
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent == null) return
+        val dataUri = intent.data
+        val extraFilePath = intent.getStringExtra("file_path")
+        when {
+            dataUri != null -> mainViewModel.setIncomingFileUri(dataUri)
+            !extraFilePath.isNullOrBlank() -> {
+                val file = File(extraFilePath)
+                if (file.exists()) {
+                    mainViewModel.setIncomingFileUri(Uri.fromFile(file))
                 }
             }
         }

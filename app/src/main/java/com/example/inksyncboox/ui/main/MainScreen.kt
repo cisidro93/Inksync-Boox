@@ -137,16 +137,56 @@ fun MainScreen(
         }
     }
 
-    // System SAF Document Picker to open any personal PDF on the Boox Note Air 4C
-    val openPdfLauncher = rememberLauncherForActivityResult(
+    val incomingUri by viewModel.incomingFileUri.collectAsStateWithLifecycle()
+
+    suspend fun loadAnyRealDocumentUri(uri: android.net.Uri) {
+        val fileName = pdfEngine.resolveDisplayName(uri)
+        val lowerName = fileName.lowercase()
+        val mime = context.contentResolver.getType(uri)?.lowercase().orEmpty()
+
+        when {
+            lowerName.endsWith(".epub") || mime.contains("epub") -> {
+                val parsedBook = com.example.inksyncboox.epub.RealEpubParser.parseEpubFromUri(
+                    context = context,
+                    uri = uri,
+                    fallbackFileName = fileName
+                )
+                if (parsedBook != null) {
+                    viewModel.loadImportedEpubBook(parsedBook)
+                }
+            }
+            lowerName.endsWith(".cbz") || lowerName.endsWith(".zip") || mime.contains("cbz") || mime.contains("comicbook") -> {
+                val count = pdfEngine.openCbzArchive(uri)
+                if (count > 0) {
+                    viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count, isCbz = true)
+                    renderedBitmap = pdfEngine.renderPage(0)
+                }
+            }
+            else -> {
+                val count = pdfEngine.ensureSampleOrOpenPdf(uri)
+                if (count > 0) {
+                    viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count, isCbz = false)
+                    renderedBitmap = pdfEngine.renderPage(0)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(incomingUri) {
+        val target = incomingUri
+        if (target != null) {
+            loadAnyRealDocumentUri(target)
+            viewModel.setIncomingFileUri(null)
+        }
+    }
+
+    // System SAF Document Picker to open ANY real personal .PDF, .EPUB, or .CBZ on the Boox Note Air 4C
+    val openDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             coroutineScope.launch {
-                val count = pdfEngine.ensureSampleOrOpenPdf(uri)
-                viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count)
-                renderedBitmap = pdfEngine.renderPage(0)
-                viewModel.selectWorkspaceMode(BooxWorkspaceMode.PDF_NEOFLOW)
+                loadAnyRealDocumentUri(uri)
             }
         }
     }
@@ -162,7 +202,19 @@ fun MainScreen(
             onCycleCornellTemplate = viewModel::cycleCornellTemplate,
             onCommitCornellStroke = viewModel::commitCornellScratchpadStroke,
             onClearCornellScratchpad = viewModel::clearCornellScratchpad,
-            onOpenPdfClick = { openPdfLauncher.launch(arrayOf("application/pdf")) },
+            onOpenPdfClick = {
+                openDocumentLauncher.launch(
+                    arrayOf(
+                        "application/pdf",
+                        "application/epub+zip",
+                        "application/vnd.comicbook+zip",
+                        "application/x-cbz",
+                        "application/zip",
+                        "application/octet-stream",
+                        "*/*"
+                    )
+                )
+            },
             onSelectPreset = viewModel::selectGridPreset,
             onSelectFlow = viewModel::selectTraversalFlow,
             onToggleStudioEdit = viewModel::toggleStudioGridEditMode,
@@ -476,7 +528,7 @@ private fun BooxCommandHeaderBar(
             )
 
             EInkActionPill(
-                label = "Open Local PDF…",
+                label = "Open .PDF / .EPUB / .CBZ…",
                 isSelected = false,
                 onClick = onOpenPdfClick
             )
