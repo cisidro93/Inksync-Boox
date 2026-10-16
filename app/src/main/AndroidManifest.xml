@@ -9,8 +9,20 @@
         android:supportsRtl="true"
         android:windowSoftInputMode="adjustResize"
         android:theme="@style/Theme.InkSyncBoox">
+
+        <!-- Onyx Boox E-Ink Native App Optimization Metadata Hints:
+             Prevents Boox system middleware from bleaching Kaleido 3 pastel highlights
+             or injecting artificial touch-To-A2 delays. -->
+        <meta-data
+            android:name="com.onyx.eink.optimize.disable_bleach"
+            android:value="true" />
+        <meta-data
+            android:name="com.onyx.eink.optimize.raw_stylus_support"
+            android:value="true" />
+
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

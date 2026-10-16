@@ -1,6 +1,8 @@
 package com.example.inksyncboox.ui.main
 
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
 import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,8 +56,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -77,6 +81,8 @@ import com.example.inksyncboox.neoflow.BooxGridPreset
 import com.example.inksyncboox.neoflow.BooxTraversalFlow
 import com.example.inksyncboox.neoflow.NormalizedRect
 import com.example.inksyncboox.pdf.BooxPdfEngine
+import com.example.inksyncboox.study.BooxWorkspaceMode
+import com.example.inksyncboox.study.UnifiedStudyCard
 import com.example.inksyncboox.theme.BooxPenSwatches
 import com.example.inksyncboox.theme.EInkBorderGray
 import com.example.inksyncboox.theme.EInkMutedText
@@ -86,7 +92,6 @@ import com.example.inksyncboox.theme.EInkSurfaceGray
 import com.example.inksyncboox.theme.InkSyncBooxTheme
 import com.example.inksyncboox.theme.KaleidoAmberHighlight
 import com.example.inksyncboox.theme.KaleidoCobaltInk
-import com.example.inksyncboox.theme.KaleidoCyanHighlight
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
@@ -141,6 +146,7 @@ fun MainScreen(
                 val count = pdfEngine.ensureSampleOrOpenPdf(uri)
                 viewModel.updateDocumentMetadata(pdfEngine.activeDocumentTitle, count)
                 renderedBitmap = pdfEngine.renderPage(0)
+                viewModel.selectWorkspaceMode(BooxWorkspaceMode.PDF_NEOFLOW)
             }
         }
     }
@@ -149,6 +155,13 @@ fun MainScreen(
         BooxWorkspaceContent(
             state = readerState,
             pageBitmap = renderedBitmap,
+            onSelectWorkspaceMode = viewModel::selectWorkspaceMode,
+            onDismissWelcomeBanner = viewModel::dismissWelcomeBackBanner,
+            onTogglePalmShield = viewModel::togglePalmShieldStylusOnly,
+            onToggleCornellSplit = viewModel::toggleCornellSplitScratchpad,
+            onCycleCornellTemplate = viewModel::cycleCornellTemplate,
+            onCommitCornellStroke = viewModel::commitCornellScratchpadStroke,
+            onClearCornellScratchpad = viewModel::clearCornellScratchpad,
             onOpenPdfClick = { openPdfLauncher.launch(arrayOf("application/pdf")) },
             onSelectPreset = viewModel::selectGridPreset,
             onSelectFlow = viewModel::selectTraversalFlow,
@@ -167,10 +180,23 @@ fun MainScreen(
             onErasePoint = viewModel::eraseAtNormalizedPoint,
             onUndo = viewModel::undoLastAnnotation,
             onClearAnnotations = viewModel::clearPageAnnotations,
+            onCycleEpubTypography = viewModel::cycleEpubTypographyPreset,
+            onToggleEpubTwoColumn = viewModel::toggleEpubTwoColumnMode,
+            onToggleEpubParagraphHighlight = viewModel::toggleEpubParagraphHighlight,
+            onJumpToStudyCard = viewModel::jumpToStudyCardOrigin,
+            onUpdateSidecarExportStatus = viewModel::updateSidecarExportStatus,
             onCycleRefreshMode = viewModel::cycleRefreshMode,
             onManualRegalFlash = viewModel::triggerManualRegalRefresh,
             onToggleHighContrast = viewModel::toggleHighContrastBAndW,
-            modifier = modifier
+            modifier = modifier.onSizeChanged { size ->
+                // Exclude reading/inking edges from Android's system Back swipe gesture on Note Air 4C
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && size.width > 0 && size.height > 0) {
+                    hostView.systemGestureExclusionRects = listOf(
+                        Rect(0, (size.height * 0.15f).toInt(), 90, (size.height * 0.85f).toInt()),
+                        Rect(size.width - 90, (size.height * 0.15f).toInt(), size.width, (size.height * 0.85f).toInt())
+                    )
+                }
+            }
         )
     }
 }
@@ -179,6 +205,13 @@ fun MainScreen(
 internal fun BooxWorkspaceContent(
     state: BooxReaderState,
     pageBitmap: Bitmap?,
+    onSelectWorkspaceMode: (BooxWorkspaceMode) -> Unit,
+    onDismissWelcomeBanner: () -> Unit,
+    onTogglePalmShield: () -> Unit,
+    onToggleCornellSplit: () -> Unit,
+    onCycleCornellTemplate: () -> Unit,
+    onCommitCornellStroke: (List<NormalizedInkPoint>, String) -> Unit,
+    onClearCornellScratchpad: () -> Unit,
     onOpenPdfClick: () -> Unit,
     onSelectPreset: (BooxGridPreset) -> Unit,
     onSelectFlow: (BooxTraversalFlow) -> Unit,
@@ -197,6 +230,11 @@ internal fun BooxWorkspaceContent(
     onErasePoint: (Float, Float) -> Unit,
     onUndo: () -> Unit,
     onClearAnnotations: () -> Unit,
+    onCycleEpubTypography: () -> Unit,
+    onToggleEpubTwoColumn: () -> Unit,
+    onToggleEpubParagraphHighlight: (String, String, Int, Int) -> Unit,
+    onJumpToStudyCard: (UnifiedStudyCard) -> Unit,
+    onUpdateSidecarExportStatus: (String) -> Unit,
     onCycleRefreshMode: () -> Unit,
     onManualRegalFlash: () -> Unit,
     onToggleHighContrast: () -> Unit,
@@ -207,10 +245,13 @@ internal fun BooxWorkspaceContent(
             .fillMaxSize()
             .background(EInkPaperWhite)
     ) {
-        // 1. TOP E-INK COMMAND HEADER (Zero shadow, 2dp solid black dividers)
+        // 1. TOP E-INK COMMAND & UNIFIED MODE SWITCHER BAR
         BooxCommandHeaderBar(
             state = state,
+            onSelectWorkspaceMode = onSelectWorkspaceMode,
             onOpenPdfClick = onOpenPdfClick,
+            onToggleCornellSplit = onToggleCornellSplit,
+            onTogglePalmShield = onTogglePalmShield,
             onCycleRefreshMode = onCycleRefreshMode,
             onManualRegalFlash = onManualRegalFlash,
             onToggleHighContrast = onToggleHighContrast
@@ -218,38 +259,88 @@ internal fun BooxWorkspaceContent(
 
         HorizontalDivider(thickness = 2.dp, color = EInkPureBlack)
 
-        // 2. NEOFLOW SMART TIERS & TRAVERSAL MATRIX BAR
-        NeoFlowControlStrip(
-            state = state,
-            onSelectPreset = onSelectPreset,
-            onSelectFlow = onSelectFlow,
-            onToggleStudioEdit = onToggleStudioEdit,
-            onToggleZoomTier = onToggleZoomTier,
-            onResetGridSplits = onResetGridSplits
-        )
+        // 2. CONTEXTUAL SUB-BAR (NeoFlow Matrix Bar when in PDF Mode)
+        if (state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW) {
+            NeoFlowControlStrip(
+                state = state,
+                onSelectPreset = onSelectPreset,
+                onSelectFlow = onSelectFlow,
+                onToggleStudioEdit = onToggleStudioEdit,
+                onToggleZoomTier = onToggleZoomTier,
+                onResetGridSplits = onResetGridSplits
+            )
+            HorizontalDivider(thickness = 2.dp, color = EInkPureBlack)
+        }
 
-        HorizontalDivider(thickness = 2.dp, color = EInkPureBlack)
-
-        // 3. CENTRAL PDF + NEOFLOW + WACOM EMR CANVAS VIEWPORT
-        Box(
+        // 3. CENTRAL UNIFIED WORKSPACE + OPTIONAL SPLIT-SCREEN CORNELL SCRATCHPAD
+        Row(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .background(EInkSurfaceGray)
-                .padding(8.dp)
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            BooxPdfNeoFlowViewport(
-                state = state,
-                pageBitmap = pageBitmap,
-                onStepPrev = onStepPrev,
-                onStepNext = onStepNext,
-                onSelectBlock = onSelectBlock,
-                onUpdateColSplit = onUpdateColSplit,
-                onUpdateRowSplit = onUpdateRowSplit,
-                onCommitStroke = onCommitStroke,
-                onCommitQuadHighlight = onCommitQuadHighlight,
-                onErasePoint = onErasePoint
-            )
+            Box(
+                modifier = Modifier
+                    .weight(if (state.showCornellSplitScratchpad) 0.62f else 1f)
+                    .fillMaxHeight()
+            ) {
+                when (state.workspaceMode) {
+                    BooxWorkspaceMode.SANCTUARY_SHELF -> {
+                        BooxSanctuaryShelfView(
+                            state = state,
+                            onSelectMode = onSelectWorkspaceMode,
+                            onOpenLocalPdf = onOpenPdfClick,
+                            onDismissWelcomeBanner = onDismissWelcomeBanner,
+                            onJumpToCard = onJumpToStudyCard
+                        )
+                    }
+                    BooxWorkspaceMode.PDF_NEOFLOW -> {
+                        BooxPdfNeoFlowViewport(
+                            state = state,
+                            pageBitmap = pageBitmap,
+                            onStepPrev = onStepPrev,
+                            onStepNext = onStepNext,
+                            onSelectBlock = onSelectBlock,
+                            onUpdateColSplit = onUpdateColSplit,
+                            onUpdateRowSplit = onUpdateRowSplit,
+                            onCommitStroke = onCommitStroke,
+                            onCommitQuadHighlight = onCommitQuadHighlight,
+                            onErasePoint = onErasePoint
+                        )
+                    }
+                    BooxWorkspaceMode.KINDLE_EPUB -> {
+                        BooxKindleEpubReaderView(
+                            state = state,
+                            onCycleTypography = onCycleEpubTypography,
+                            onToggleTwoColumn = onToggleEpubTwoColumn,
+                            onToggleParagraphHighlight = onToggleEpubParagraphHighlight,
+                            onStepPrevChapter = onStepPrev,
+                            onStepNextChapter = onStepNext
+                        )
+                    }
+                    BooxWorkspaceMode.STUDY_BINDER -> {
+                        BooxStudyHubBinderView(
+                            state = state,
+                            onJumpToCard = onJumpToStudyCard,
+                            onExportSidecars = onUpdateSidecarExportStatus
+                        )
+                    }
+                }
+            }
+
+            if (state.showCornellSplitScratchpad) {
+                BooxCornellScratchpadPane(
+                    state = state,
+                    onCycleTemplate = onCycleCornellTemplate,
+                    onCommitScratchpadStroke = onCommitCornellStroke,
+                    onClearScratchpad = onClearCornellScratchpad,
+                    modifier = Modifier
+                        .weight(0.38f)
+                        .fillMaxHeight()
+                )
+            }
         }
 
         HorizontalDivider(thickness = 2.dp, color = EInkPureBlack)
@@ -270,78 +361,124 @@ internal fun BooxWorkspaceContent(
 @Composable
 private fun BooxCommandHeaderBar(
     state: BooxReaderState,
+    onSelectWorkspaceMode: (BooxWorkspaceMode) -> Unit,
     onOpenPdfClick: () -> Unit,
+    onToggleCornellSplit: () -> Unit,
+    onTogglePalmShield: () -> Unit,
     onCycleRefreshMode: () -> Unit,
     onManualRegalFlash: () -> Unit,
     onToggleHighContrast: () -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(EInkPaperWhite)
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .background(EInkPureBlack, RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
+        // Row 1: Brand Title + Hardware Telemetry + Hardware E-Ink Controls
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .background(EInkPureBlack, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "INKSYNC BOOX · 4C",
+                            color = EInkPaperWhite,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "INKSYNC BOOX · 4C",
-                        color = EInkPaperWhite,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
+                        text = state.workspaceMode.subtitle,
+                        color = EInkPureBlack,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = state.documentTitle,
-                    color = EInkPureBlack,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = "${BooxEpdController.hardwareModelSummary} · ${state.lastStylusTelemetry}",
+                    color = EInkMutedText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "${BooxEpdController.hardwareModelSummary} · ${state.lastStylusTelemetry}",
-                color = EInkMutedText,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                EInkActionPill(
+                    label = state.refreshMode.title,
+                    isSelected = state.refreshMode != com.example.inksyncboox.eink.BooxRefreshMode.REGAL_HD,
+                    onClick = onCycleRefreshMode
+                )
+                EInkActionPill(
+                    label = "Regal Flash",
+                    isSelected = false,
+                    onClick = onManualRegalFlash
+                )
+                EInkActionPill(
+                    label = if (state.highContrastBAndW) "300PPI B&W" else "Kaleido 3",
+                    isSelected = state.highContrastBAndW,
+                    onClick = onToggleHighContrast
+                )
+            }
         }
 
+        // Row 2: Unified Mode Switcher (Sanctuary Shelf · PDF NeoFlow · Kindle EPUB · Study Hub) + Cornell Split & Palm Shield
         Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            BooxWorkspaceMode.entries.forEach { mode ->
+                EInkActionPill(
+                    label = "${mode.badge}: ${mode.title}",
+                    isSelected = state.workspaceMode == mode,
+                    onClick = { onSelectWorkspaceMode(mode) }
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .height(24.dp)
+                    .background(EInkPureBlack)
+            )
+
             EInkActionPill(
-                label = "Open PDF",
+                label = if (state.showCornellSplitScratchpad) "Cornell Split: ON" else "+ Cornell Scratchpad",
+                isSelected = state.showCornellSplitScratchpad,
+                onClick = onToggleCornellSplit
+            )
+
+            EInkActionPill(
+                label = if (state.palmShieldStylusOnly) "Palm Shield: LOCKED" else "Palm Shield: Auto",
+                isSelected = state.palmShieldStylusOnly,
+                onClick = onTogglePalmShield
+            )
+
+            EInkActionPill(
+                label = "Open Local PDF…",
                 isSelected = false,
                 onClick = onOpenPdfClick
-            )
-            EInkActionPill(
-                label = state.refreshMode.title,
-                isSelected = state.refreshMode != com.example.inksyncboox.eink.BooxRefreshMode.REGAL_HD,
-                onClick = onCycleRefreshMode
-            )
-            EInkActionPill(
-                label = "Regal Flash",
-                isSelected = false,
-                onClick = onManualRegalFlash
-            )
-            EInkActionPill(
-                label = if (state.highContrastBAndW) "300PPI B&W" else "Kaleido 3",
-                isSelected = state.highContrastBAndW,
-                onClick = onToggleHighContrast
             )
         }
     }
@@ -450,6 +587,8 @@ private fun BooxPdfNeoFlowViewport(
     val activeStrokePoints = remember { mutableStateListOf<NormalizedInkPoint>() }
     var quadDragStart by remember { mutableStateOf<Offset?>(null) }
     var quadDragCurrent by remember { mutableStateOf<Offset?>(null) }
+    // Track last Wacom stylus activity timestamp to enforce automatic 850ms Palm Rejection cooldown
+    var lastStylusEventMillis by remember { mutableLongStateOf(0L) }
 
     val blocks = state.computedBlocks
     val currentBlock = state.currentBlock
@@ -470,7 +609,6 @@ private fun BooxPdfNeoFlowViewport(
         val canvasHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val density = LocalDensity.current
 
-        // Helper functions to map between screen pixel coordinates and normalized page [0, 1] coordinates
         fun screenToPageNormalized(screenX: Float, screenY: Float): Pair<Float, Float> {
             val u = (screenX / canvasWidthPx).coerceIn(0f, 1f)
             val v = (screenY / canvasHeightPx).coerceIn(0f, 1f)
@@ -492,10 +630,19 @@ private fun BooxPdfNeoFlowViewport(
                     val toolType = motionEvent.getToolType(0)
                     val isStylusHardware = toolType == MotionEvent.TOOL_TYPE_STYLUS ||
                         toolType == MotionEvent.TOOL_TYPE_ERASER
+                    val now = System.currentTimeMillis()
+                    if (isStylusHardware) {
+                        lastStylusEventMillis = now
+                    }
+                    val withinPalmCooldown = (now - lastStylusEventMillis) < 850L
                     val pressure = motionEvent.pressure.coerceIn(0.05f, 1f)
                     val tilt = motionEvent.getAxisValue(MotionEvent.AXIS_TILT)
 
-                    // Automatic Wacom Pen Barrel / Tail Eraser or Direct Stylus Inking
+                    // If Palm Shield is locked and a finger/palm touches the screen, ignore accidental page turns
+                    if (!isStylusHardware && (state.palmShieldStylusOnly || withinPalmCooldown)) {
+                        return@pointerInteropFilter true
+                    }
+
                     val effectiveTool = when {
                         state.isStudioGridEditMode -> BooxStylusTool.NAVIGATE
                         toolType == MotionEvent.TOOL_TYPE_ERASER -> BooxStylusTool.ERASER
@@ -514,7 +661,6 @@ private fun BooxPdfNeoFlowViewport(
                                     true
                                 }
                                 MotionEvent.ACTION_MOVE -> {
-                                    // Process historical batched Wacom EMR samples (up to 240Hz on Note Air 4C)
                                     val historySize = motionEvent.historySize
                                     for (h in 0 until historySize) {
                                         val hx = motionEvent.getHistoricalX(h)
@@ -561,7 +707,6 @@ private fun BooxPdfNeoFlowViewport(
                                     if (start != null && end != null) {
                                         val (x1, y1) = screenToPageNormalized(min(start.x, end.x), min(start.y, end.y))
                                         val (x2, y2) = screenToPageNormalized(max(start.x, end.x), max(start.y, end.y))
-                                        // Snap to clean horizontal reading line bands
                                         val snappedTop = (y1 * 40f).roundToInt() / 40f
                                         val snappedBottom = max(snappedTop + 0.025f, (y2 * 40f).roundToInt() / 40f)
                                         val rect = NormalizedRect(
@@ -572,7 +717,7 @@ private fun BooxPdfNeoFlowViewport(
                                         )
                                         onCommitQuadHighlight(
                                             rect,
-                                            "Quad-Point Text Highlight Snapped · [${(rect.left * 100).roundToInt()}%, ${(rect.top * 100).roundToInt()}%]"
+                                            "Quad-Point Highlight Pinned to Study Hub · [${(rect.left * 100).roundToInt()}%, ${(rect.top * 100).roundToInt()}%]"
                                         )
                                     }
                                     true
@@ -599,7 +744,6 @@ private fun BooxPdfNeoFlowViewport(
                                     tapXRatio < 0.24f -> onStepPrev()
                                     tapXRatio > 0.76f -> onStepNext()
                                     else -> {
-                                        // Center tap selects whichever quadrant was tapped in full-page view
                                         val (px, py) = screenToPageNormalized(motionEvent.x, motionEvent.y)
                                         val hit = blocks.firstOrNull { b ->
                                             px in b.baseRect.left..b.baseRect.right &&
@@ -616,7 +760,6 @@ private fun BooxPdfNeoFlowViewport(
                     }
                 }
         ) {
-            // 1. Draw Cropped / Scaled PDF Page Bitmap
             if (pageBitmap != null) {
                 val srcLeft = (viewportRect.left * pageBitmap.width).roundToInt().coerceIn(0, pageBitmap.width - 1)
                 val srcTop = (viewportRect.top * pageBitmap.height).roundToInt().coerceIn(0, pageBitmap.height - 1)
@@ -632,7 +775,6 @@ private fun BooxPdfNeoFlowViewport(
                 )
             }
 
-            // 2. Draw Snapped Quad-Point Text Highlights (BlendMode.Multiply keeps 300 PPI black ink razor-sharp)
             state.currentPageQuadHighlights.forEach { quad ->
                 val topLeft = pageNormalizedToScreen(quad.bounds.left, quad.bounds.top)
                 val bottomRight = pageNormalizedToScreen(quad.bounds.right, quad.bounds.bottom)
@@ -650,7 +792,6 @@ private fun BooxPdfNeoFlowViewport(
                 )
             }
 
-            // 3. Draw Committed Wacom EMR Ink Strokes
             state.currentPageStrokes.forEach { stroke ->
                 if (stroke.points.size >= 2) {
                     val path = Path()
@@ -675,7 +816,6 @@ private fun BooxPdfNeoFlowViewport(
                 }
             }
 
-            // 4. Draw Live In-Flight Wacom Stroke (Zero-Lag Front Preview)
             if (activeStrokePoints.size >= 2) {
                 val livePath = Path()
                 val first = pageNormalizedToScreen(activeStrokePoints.first().x, activeStrokePoints.first().y)
@@ -697,7 +837,6 @@ private fun BooxPdfNeoFlowViewport(
                 )
             }
 
-            // 5. Draw Live Quad-Point Selection Marquee
             val qStart = quadDragStart
             val qEnd = quadDragCurrent
             if (qStart != null && qEnd != null) {
@@ -719,7 +858,6 @@ private fun BooxPdfNeoFlowViewport(
                 )
             }
 
-            // 6. When in Full-Page View, Draw NeoFlow Smart Tier Matrix Boundaries & Active Selection Frame
             if (!state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1) {
                 blocks.forEach { block ->
                     val tl = pageNormalizedToScreen(block.baseRect.left, block.baseRect.top)
@@ -735,7 +873,6 @@ private fun BooxPdfNeoFlowViewport(
             }
         }
 
-        // 7. Sequence Step Badges Overlay (in Full Page or Studio Grid Edit Mode)
         if (!state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1) {
             blocks.forEach { block ->
                 val isCurrent = block.stepIndex == state.activeStepIndex
@@ -764,7 +901,6 @@ private fun BooxPdfNeoFlowViewport(
             }
         }
 
-        // 8. Interactive 48dp Touch-Target Split Divider Handles in Studio Grid Edit Mode
         if (state.isStudioGridEditMode && !state.isZoomedToTier) {
             state.colSplitRatios.forEachIndexed { idx, ratio ->
                 val handleX = with(density) { (ratio * canvasWidthPx).toDp() - 22.dp }
@@ -845,7 +981,6 @@ private fun BooxPdfNeoFlowViewport(
             }
         }
 
-        // 9. Floating HUD Pill (Top-Right): Active Page & Smart Tier Status
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -882,7 +1017,6 @@ private fun BooxWacomStylusDock(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Row 1: Stylus Tools + Kaleido 3 Color Swatches + Undo/Clear
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -942,7 +1076,6 @@ private fun BooxWacomStylusDock(
             EInkActionPill(label = "Clear Page", isSelected = false, onClick = onClearAnnotations)
         }
 
-        // Row 2: Instant Zero-Animation Tier & Page Stepper Bar
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -955,7 +1088,7 @@ private fun BooxWacomStylusDock(
             )
 
             Text(
-                text = "Strokes: ${state.currentPageStrokes.size} · Quads: ${state.currentPageQuadHighlights.size} · Overlap: ${(state.overlapRatio * 100).roundToInt()}%",
+                text = "Study Hub: ${state.studyCards.size} Cards · Strokes: ${state.currentPageStrokes.size + state.cornellStrokes.size} · Auto-Regal: ${state.turnsSinceLastRegal}/${state.autoRegalEveryNTurns}",
                 color = EInkPureBlack,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -1006,13 +1139,20 @@ fun Greeting(name: String, modifier: Modifier = Modifier) {
     Text(text = "Hello $name!", modifier = modifier)
 }
 
-@Preview(showBackground = true, widthDp = 900, heightDp = 1200)
+@Preview(showBackground = true, widthDp = 1000, heightDp = 1300)
 @Composable
 fun MainScreenPreview() {
     InkSyncBooxTheme {
         BooxWorkspaceContent(
             state = BooxReaderState(),
             pageBitmap = null,
+            onSelectWorkspaceMode = {},
+            onDismissWelcomeBanner = {},
+            onTogglePalmShield = {},
+            onToggleCornellSplit = {},
+            onCycleCornellTemplate = {},
+            onCommitCornellStroke = { _, _ -> },
+            onClearCornellScratchpad = {},
             onOpenPdfClick = {},
             onSelectPreset = {},
             onSelectFlow = {},
@@ -1031,6 +1171,11 @@ fun MainScreenPreview() {
             onErasePoint = { _, _ -> },
             onUndo = {},
             onClearAnnotations = {},
+            onCycleEpubTypography = {},
+            onToggleEpubTwoColumn = {},
+            onToggleEpubParagraphHighlight = { _, _, _, _ -> },
+            onJumpToStudyCard = {},
+            onUpdateSidecarExportStatus = {},
             onCycleRefreshMode = {},
             onManualRegalFlash = {},
             onToggleHighContrast = {}
