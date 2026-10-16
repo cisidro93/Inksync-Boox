@@ -1312,8 +1312,8 @@ private fun BooxWacomStylusDock(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Subtle Kindle Scribe / NeoReader Progress Bar
-            val totalSteps = max(1, state.blocks.size)
-            val progressFraction = ((state.activeBlockIndex + 1).toFloat() / totalSteps.toFloat()).coerceIn(0.1f, 1f)
+            val totalSteps = max(1, state.currentBlocks.size)
+            val progressFraction = ((state.activeStepIndex + 1).toFloat() / totalSteps.toFloat()).coerceIn(0.1f, 1f)
             Box(
                 modifier = Modifier
                     .width(120.dp)
