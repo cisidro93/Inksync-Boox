@@ -979,17 +979,18 @@ internal fun SanctuaryPillButton(
 ) {
     Surface(
         modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(4.dp),
+        shape = RoundedCornerShape(50),
         color = if (isPrimary) EInkPureBlack else EInkPaperWhite,
-        border = BorderStroke(2.dp, EInkPureBlack)
+        border = BorderStroke(1.dp, if (isPrimary) EInkPureBlack else EInkBorderGray)
     ) {
         Text(
             text = label,
             color = if (isPrimary) EInkPaperWhite else EInkPureBlack,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.SansSerif,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
         )
     }
 }
+
