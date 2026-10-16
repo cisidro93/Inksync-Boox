@@ -227,6 +227,9 @@ fun MainScreen(
             onSelectFlow = viewModel::selectTraversalFlow,
             onToggleStudioEdit = viewModel::toggleStudioGridEditMode,
             onToggleZoomTier = viewModel::toggleZoomToActiveTier,
+            onTogglePanelsSpotlight = viewModel::togglePanelsSpotlightDimming,
+            onTogglePanelsSpread = viewModel::togglePanelsDoublePageSpread,
+            onTogglePanelsBleed = viewModel::togglePanelsDarkGutterBleed,
             onStepPrev = viewModel::stepBackwardTierOrPage,
             onStepNext = viewModel::stepForwardTierOrPage,
             onSelectBlock = viewModel::selectBlockStep,
@@ -277,6 +280,9 @@ internal fun BooxWorkspaceContent(
     onSelectFlow: (BooxTraversalFlow) -> Unit,
     onToggleStudioEdit: () -> Unit,
     onToggleZoomTier: () -> Unit,
+    onTogglePanelsSpotlight: () -> Unit = {},
+    onTogglePanelsSpread: () -> Unit = {},
+    onTogglePanelsBleed: () -> Unit = {},
     onStepPrev: () -> Unit,
     onStepNext: () -> Unit,
     onSelectBlock: (Int, Boolean) -> Unit,
@@ -343,14 +349,17 @@ internal fun BooxWorkspaceContent(
 
             HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
 
-            // Contextual NeoFlow Pill Strip when in PDF Mode
-            if (state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW) {
+            // Contextual NeoFlow / Panels Studio Pill Strip when in PDF or PANELS_COMICS Mode
+            if (state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW || state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS) {
                 NeoFlowControlStrip(
                     state = state,
                     onSelectPreset = onSelectPreset,
                     onSelectFlow = onSelectFlow,
                     onToggleStudioEdit = onToggleStudioEdit,
                     onToggleZoomTier = onToggleZoomTier,
+                    onTogglePanelsSpotlight = onTogglePanelsSpotlight,
+                    onTogglePanelsSpread = onTogglePanelsSpread,
+                    onTogglePanelsBleed = onTogglePanelsBleed,
                     onResetGridSplits = onResetGridSplits
                 )
                 HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
@@ -384,6 +393,7 @@ internal fun BooxWorkspaceContent(
                                     onJumpToCard = onJumpToStudyCard
                                 )
                             }
+                            BooxWorkspaceMode.PANELS_COMICS,
                             BooxWorkspaceMode.PDF_NEOFLOW -> {
                                 BooxPdfNeoFlowViewport(
                                     state = state,
@@ -497,6 +507,7 @@ private fun BooxLeftNavigationRail(
 
             val navItems = listOf(
                 Triple(BooxWorkspaceMode.SANCTUARY_SHELF, "Shelf", "□"),
+                Triple(BooxWorkspaceMode.PANELS_COMICS, "Panels", "▣"),
                 Triple(BooxWorkspaceMode.PDF_NEOFLOW, "NeoFlow", "⊞"),
                 Triple(BooxWorkspaceMode.KINDLE_EPUB, "Reflow", "≡"),
                 Triple(BooxWorkspaceMode.STUDY_BINDER, "Binder", "✦")
@@ -763,6 +774,9 @@ private fun NeoFlowControlStrip(
     onSelectFlow: (BooxTraversalFlow) -> Unit,
     onToggleStudioEdit: () -> Unit,
     onToggleZoomTier: () -> Unit,
+    onTogglePanelsSpotlight: () -> Unit = {},
+    onTogglePanelsSpread: () -> Unit = {},
+    onTogglePanelsBleed: () -> Unit = {},
     onResetGridSplits: () -> Unit
 ) {
     Row(
@@ -774,12 +788,38 @@ private fun NeoFlowControlStrip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        val isPanelsMode = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS
         Text(
-            text = "Matrix",
+            text = if (isPanelsMode) "Panels Studio" else "Matrix",
             color = EInkMutedText,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.SemiBold
         )
+
+        if (isPanelsMode) {
+            EInkActionPill(
+                label = if (state.panelsSpotlightDimming) "Spotlight: ON" else "Spotlight: OFF",
+                isSelected = state.panelsSpotlightDimming,
+                onClick = onTogglePanelsSpotlight
+            )
+            EInkActionPill(
+                label = if (state.panelsDoublePageSpread) "2-Page Spread (+1 Cover)" else "1-Page Fit",
+                isSelected = state.panelsDoublePageSpread,
+                onClick = onTogglePanelsSpread
+            )
+            EInkActionPill(
+                label = if (state.panelsDarkGutterBleed) "Bleed: Dark Ink" else "Bleed: Newsprint",
+                isSelected = state.panelsDarkGutterBleed,
+                onClick = onTogglePanelsBleed
+            )
+
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(18.dp)
+                    .background(EInkBorderGray)
+            )
+        }
 
         val primaryPresets = listOf(
             BooxGridPreset.GRID_1X1,
@@ -820,13 +860,13 @@ private fun NeoFlowControlStrip(
         )
 
         EInkActionPill(
-            label = if (state.isZoomedToTier) "Quadrant Focus" else "Full Page",
+            label = if (state.isZoomedToTier) "Panel Zoom" else "Full Page",
             isSelected = state.isZoomedToTier,
             onClick = onToggleZoomTier
         )
 
         EInkActionPill(
-            label = if (state.isStudioGridEditMode) "Done Adjusting" else "Adjust Splits",
+            label = if (state.isStudioGridEditMode) "Done Adjusting" else "Adjust Panels",
             isSelected = state.isStudioGridEditMode,
             onClick = onToggleStudioEdit
         )
@@ -870,11 +910,17 @@ private fun BooxPdfNeoFlowViewport(
         NormalizedRect(0f, 0f, 1f, 1f)
     }
 
+    val isPanelsMode = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS
+    val gutterBleedColor = when {
+        isPanelsMode && state.panelsDarkGutterBleed -> Color(0xFF141417)
+        isPanelsMode -> Color(0xFFFAF8F2)
+        else -> EInkPaperWhite
+    }
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .border(2.dp, EInkPureBlack)
-            .background(EInkPaperWhite)
+            .background(gutterBleedColor)
             .clipToBounds()
     ) {
         val canvasWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
@@ -1135,11 +1181,26 @@ private fun BooxPdfNeoFlowViewport(
                     val tl = pageNormalizedToScreen(block.baseRect.left, block.baseRect.top)
                     val br = pageNormalizedToScreen(block.baseRect.right, block.baseRect.bottom)
                     val isSelected = block.stepIndex == state.activeStepIndex
+                    val panelSize = Size(br.x - tl.x, br.y - tl.y)
+
+                    // iOS Panels Guided Spotlight Dimming Mask over non-active panels
+                    if (isPanelsMode && state.panelsSpotlightDimming && !isSelected) {
+                        drawRect(
+                            color = Color(0x99141417),
+                            topLeft = tl,
+                            size = panelSize
+                        )
+                    }
+
                     drawRect(
-                        color = if (isSelected) EInkPureBlack else EInkBorderGray,
+                        color = when {
+                            isSelected && isPanelsMode -> Color(0xFFFACC15)
+                            isSelected -> EInkPureBlack
+                            else -> EInkBorderGray
+                        },
                         topLeft = tl,
-                        size = Size(br.x - tl.x, br.y - tl.y),
-                        style = Stroke(width = if (isSelected) 4.5f else 2f)
+                        size = panelSize,
+                        style = Stroke(width = if (isSelected) 4f else 1.5f)
                     )
                 }
             }
@@ -1151,23 +1212,25 @@ private fun BooxPdfNeoFlowViewport(
                 val badgeX = with(density) { (block.baseRect.left * canvasWidthPx + 12f).toDp() }
                 val badgeY = with(density) { (block.baseRect.top * canvasHeightPx + 12f).toDp() }
 
-                Box(
+                Surface(
                     modifier = Modifier
                         .offset(x = badgeX, y = badgeY)
-                        .background(
-                            if (isCurrent) EInkPureBlack else EInkPaperWhite,
-                            RoundedCornerShape(4.dp)
-                        )
-                        .border(2.dp, EInkPureBlack, RoundedCornerShape(4.dp))
-                        .clickable { onSelectBlock(block.stepIndex, true) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .clickable { onSelectBlock(block.stepIndex, true) },
+                    shape = RoundedCornerShape(50),
+                    color = if (isCurrent) EInkPureBlack else EInkPaperWhite,
+                    border = BorderStroke(1.dp, if (isCurrent) EInkPureBlack else EInkBorderGray)
                 ) {
                     Text(
-                        text = "${block.displayStepNumber} · R${block.row + 1}C${block.col + 1}",
+                        text = if (isPanelsMode) {
+                            "Panel ${block.displayStepNumber}"
+                        } else {
+                            "${block.displayStepNumber} · R${block.row + 1}C${block.col + 1}"
+                        },
                         color = if (isCurrent) EInkPaperWhite else EInkPureBlack,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = FontFamily.Monospace
+                        fontSize = 11.sp,
+                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium,
+                        fontFamily = FontFamily.SansSerif,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -1312,7 +1375,7 @@ private fun BooxWacomStylusDock(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Subtle Kindle Scribe / NeoReader Progress Bar
-            val totalSteps = max(1, state.currentBlocks.size)
+            val totalSteps = max(1, state.computedBlocks.size)
             val progressFraction = ((state.activeStepIndex + 1).toFloat() / totalSteps.toFloat()).coerceIn(0.1f, 1f)
             Box(
                 modifier = Modifier

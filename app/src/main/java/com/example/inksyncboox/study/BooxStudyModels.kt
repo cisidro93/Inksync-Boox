@@ -21,7 +21,12 @@ enum class BooxWorkspaceMode(
     SANCTUARY_SHELF(
         title = "Library Sanctuary",
         badge = "SHELF",
-        subtitle = "Unified EPUB + PDF + Study Desk · Zero Daily Streak Guilt"
+        subtitle = "Unified EPUB + PDF + Panels Comics Desk · Zero Daily Streak Guilt"
+    ),
+    PANELS_COMICS(
+        title = "Panels Studio",
+        badge = "PANELS",
+        subtitle = "Guided Panel Spotlight · 2-Page Spread (+1 Cover) · Manga RTL & Comic LTR"
     ),
     PDF_NEOFLOW(
         title = "PDF NeoFlow",

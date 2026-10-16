@@ -78,7 +78,11 @@ data class BooxReaderState(
     val studyCards: List<UnifiedStudyCard> = defaultSampleStudyCards(),
     val lastSidecarExportStatus: String = "Auto-Sidecar Ready (.inksync.json + .md)",
     val regalFlashTick: Int = 0,
-    val lastStylusTelemetry: String = "Wacom EMR Ready · 4096 Levels"
+    val lastStylusTelemetry: String = "Wacom EMR Ready · 4096 Levels",
+    // iOS Panels-inspired Comic & Manga Studio State
+    val panelsSpotlightDimming: Boolean = true,
+    val panelsDoublePageSpread: Boolean = false,
+    val panelsDarkGutterBleed: Boolean = true
 ) {
     val computedBlocks: List<BooxSectionBlock>
         get() = NeoFlowEngine.computeBlocks(
@@ -245,18 +249,39 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
     fun updateDocumentMetadata(title: String, pageCount: Int, isCbz: Boolean = false) {
         _readerState.update { state ->
             state.copy(
-                workspaceMode = BooxWorkspaceMode.PDF_NEOFLOW,
+                workspaceMode = if (isCbz) BooxWorkspaceMode.PANELS_COMICS else BooxWorkspaceMode.PDF_NEOFLOW,
                 documentTitle = title,
                 pageCount = pageCount.coerceAtLeast(1),
                 pageIndex = 0,
                 activeStepIndex = 0,
                 traversalFlow = if (isCbz) BooxTraversalFlow.REVERSE_Z else state.traversalFlow,
                 lastStylusTelemetry = if (isCbz) {
-                    "Loaded Real .CBZ Archive ($pageCount pages) · Reverse-Z Manga Ready"
+                    "Panels Studio · $title ($pageCount pages) · Guided Spotlight RTL"
                 } else {
                     "Loaded Real .PDF ($pageCount pages) · NeoFlow Matrix Ready"
                 }
             )
+        }
+    }
+
+    fun togglePanelsSpotlightDimming() {
+        _readerState.update { state ->
+            state.copy(panelsSpotlightDimming = !state.panelsSpotlightDimming)
+        }
+    }
+
+    fun togglePanelsDoublePageSpread() {
+        _readerState.update { state ->
+            state.copy(
+                panelsDoublePageSpread = !state.panelsDoublePageSpread,
+                regalFlashTick = state.regalFlashTick + 1
+            )
+        }
+    }
+
+    fun togglePanelsDarkGutterBleed() {
+        _readerState.update { state ->
+            state.copy(panelsDarkGutterBleed = !state.panelsDarkGutterBleed)
         }
     }
 
