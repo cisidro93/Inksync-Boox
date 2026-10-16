@@ -51,6 +51,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -230,6 +232,8 @@ fun MainScreen(
             onTogglePanelsSpotlight = viewModel::togglePanelsSpotlightDimming,
             onTogglePanelsSpread = viewModel::togglePanelsDoublePageSpread,
             onTogglePanelsBleed = viewModel::togglePanelsDarkGutterBleed,
+            onToggleKaleidoBoost = viewModel::toggleKaleidoOpticalBoost,
+            onToggleMarginTrim = viewModel::toggleAutoTrimMargins,
             onStepPrev = viewModel::stepBackwardTierOrPage,
             onStepNext = viewModel::stepForwardTierOrPage,
             onSelectBlock = viewModel::selectBlockStep,
@@ -283,6 +287,8 @@ internal fun BooxWorkspaceContent(
     onTogglePanelsSpotlight: () -> Unit = {},
     onTogglePanelsSpread: () -> Unit = {},
     onTogglePanelsBleed: () -> Unit = {},
+    onToggleKaleidoBoost: () -> Unit = {},
+    onToggleMarginTrim: () -> Unit = {},
     onStepPrev: () -> Unit,
     onStepNext: () -> Unit,
     onSelectBlock: (Int, Boolean) -> Unit,
@@ -360,6 +366,8 @@ internal fun BooxWorkspaceContent(
                     onTogglePanelsSpotlight = onTogglePanelsSpotlight,
                     onTogglePanelsSpread = onTogglePanelsSpread,
                     onTogglePanelsBleed = onTogglePanelsBleed,
+                    onToggleKaleidoBoost = onToggleKaleidoBoost,
+                    onToggleMarginTrim = onToggleMarginTrim,
                     onResetGridSplits = onResetGridSplits
                 )
                 HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
@@ -777,6 +785,8 @@ private fun NeoFlowControlStrip(
     onTogglePanelsSpotlight: () -> Unit = {},
     onTogglePanelsSpread: () -> Unit = {},
     onTogglePanelsBleed: () -> Unit = {},
+    onToggleKaleidoBoost: () -> Unit = {},
+    onToggleMarginTrim: () -> Unit = {},
     onResetGridSplits: () -> Unit
 ) {
     Row(
@@ -860,6 +870,18 @@ private fun NeoFlowControlStrip(
         )
 
         EInkActionPill(
+            label = if (state.kaleidoOpticalBoost) "Kaleido LUT: ON" else "Kaleido LUT: OFF",
+            isSelected = state.kaleidoOpticalBoost,
+            onClick = onToggleKaleidoBoost
+        )
+
+        EInkActionPill(
+            label = if (state.autoTrimMargins) "Trim Margins: ON" else "Trim Margins",
+            isSelected = state.autoTrimMargins,
+            onClick = onToggleMarginTrim
+        )
+
+        EInkActionPill(
             label = if (state.isZoomedToTier) "Panel Zoom" else "Full Page",
             isSelected = state.isZoomedToTier,
             onClick = onToggleZoomTier
@@ -904,10 +926,15 @@ private fun BooxPdfNeoFlowViewport(
 
     val blocks = state.computedBlocks
     val currentBlock = state.currentBlock
-    val viewportRect = if (state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1) {
+    val baseViewportRect = if (state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1) {
         currentBlock.redundantRect
     } else {
         NormalizedRect(0f, 0f, 1f, 1f)
+    }
+    val viewportRect = if (state.autoTrimMargins && !state.isZoomedToTier) {
+        NormalizedRect(0.055f, 0.055f, 0.945f, 0.945f)
+    } else {
+        baseViewportRect
     }
 
     val isPanelsMode = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS
@@ -1084,12 +1111,31 @@ private fun BooxPdfNeoFlowViewport(
                 val srcWidth = (viewportRect.width * pageBitmap.width).roundToInt().coerceIn(1, pageBitmap.width - srcLeft)
                 val srcHeight = (viewportRect.height * pageBitmap.height).roundToInt().coerceIn(1, pageBitmap.height - srcTop)
 
+                // Kaleido 3 Optical Contrast & Shadow Un-Crush LUT:
+                // 1.12x contrast gain + slight shadow lift so dark comic panels don't crush to black
+                // and dingy off-white PDF backgrounds clip cleanly to pure #FFFFFF.
+                val kaleidoLutFilter = if (state.kaleidoOpticalBoost) {
+                    ColorFilter.colorMatrix(
+                        ColorMatrix(
+                            floatArrayOf(
+                                1.12f, 0f, 0f, 0f, -6f,
+                                0f, 1.12f, 0f, 0f, -6f,
+                                0f, 0f, 1.12f, 0f, -6f,
+                                0f, 0f, 0f, 1f, 0f
+                            )
+                        )
+                    )
+                } else {
+                    null
+                }
+
                 drawImage(
                     image = pageBitmap.asImageBitmap(),
                     srcOffset = IntOffset(srcLeft, srcTop),
                     srcSize = IntSize(srcWidth, srcHeight),
                     dstOffset = IntOffset.Zero,
-                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt())
+                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                    colorFilter = kaleidoLutFilter
                 )
             }
 

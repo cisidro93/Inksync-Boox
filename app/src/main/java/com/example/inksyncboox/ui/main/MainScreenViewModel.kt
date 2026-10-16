@@ -79,10 +79,12 @@ data class BooxReaderState(
     val lastSidecarExportStatus: String = "Auto-Sidecar Ready (.inksync.json + .md)",
     val regalFlashTick: Int = 0,
     val lastStylusTelemetry: String = "Wacom EMR Ready · 4096 Levels",
-    // iOS Panels-inspired Comic & Manga Studio State
+    // iOS Panels-inspired Comic & Manga Studio State + Kaleido 3 Optical Enhancements
     val panelsSpotlightDimming: Boolean = true,
     val panelsDoublePageSpread: Boolean = false,
-    val panelsDarkGutterBleed: Boolean = true
+    val panelsDarkGutterBleed: Boolean = true,
+    val kaleidoOpticalBoost: Boolean = true,
+    val autoTrimMargins: Boolean = false
 ) {
     val computedBlocks: List<BooxSectionBlock>
         get() = NeoFlowEngine.computeBlocks(
@@ -282,6 +284,36 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
     fun togglePanelsDarkGutterBleed() {
         _readerState.update { state ->
             state.copy(panelsDarkGutterBleed = !state.panelsDarkGutterBleed)
+        }
+    }
+
+    fun toggleKaleidoOpticalBoost() {
+        _readerState.update { state ->
+            val enabled = !state.kaleidoOpticalBoost
+            state.copy(
+                kaleidoOpticalBoost = enabled,
+                regalFlashTick = state.regalFlashTick + 1,
+                lastStylusTelemetry = if (enabled) {
+                    "Kaleido 3 Optical LUT ON · White-Point Clip + Shadow Lift"
+                } else {
+                    "Kaleido 3 Optical LUT OFF · Native Gamma"
+                }
+            )
+        }
+    }
+
+    fun toggleAutoTrimMargins() {
+        _readerState.update { state ->
+            val enabled = !state.autoTrimMargins
+            state.copy(
+                autoTrimMargins = enabled,
+                regalFlashTick = state.regalFlashTick + 1,
+                lastStylusTelemetry = if (enabled) {
+                    "Auto-Margin Trim ON (6.5% Border Crop)"
+                } else {
+                    "Auto-Margin Trim OFF (Full Bleed)"
+                }
+            )
         }
     }
 

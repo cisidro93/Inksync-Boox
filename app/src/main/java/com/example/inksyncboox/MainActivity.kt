@@ -76,13 +76,22 @@ class MainActivity : ComponentActivity() {
         return when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_DOWN,
             KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_SPACE,
+            KeyEvent.KEYCODE_MEDIA_NEXT,
+            KeyEvent.KEYCODE_BUTTON_R1,
+            KeyEvent.KEYCODE_BUTTON_A -> {
                 mainViewModel.stepForwardTierOrPage()
                 true
             }
             KeyEvent.KEYCODE_VOLUME_UP,
             KeyEvent.KEYCODE_PAGE_UP,
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            KeyEvent.KEYCODE_BUTTON_L1,
+            KeyEvent.KEYCODE_BUTTON_B -> {
                 mainViewModel.stepBackwardTierOrPage()
                 true
             }
