@@ -44,11 +44,24 @@ With the Pen or Marker tool selected, ink is drawn by Onyx's firmware through `T
 
 Margin detection is ported from Aidoku's `CropBordersProcessor` (near-white and near-black pixels count as border). The "Kindle style" tap layout is Mihon's `KindlishNavigation`. Spread splitting and page preloading follow both apps' readers.
 
+## Send to Picco
+
+For the BOOX Picco (3.97", 480 × 800, running Boox's fork of CrossPoint Reader), open a PDF or comic, tap the middle of the page, and choose **Picco**. The app converts it to CrossPoint's `.xtch` (4 grays) or `.xtc` (black and white) format:
+
+- **Whole pages** (spreads split into halves), **panels** (one panel per screen, so speech bubbles are readable on a 4" screen), or **panels with a page overview** first. Panels follow your tier grid; with no grid, each page is split in two.
+- Auto-crop, Floyd–Steinberg or Atkinson dithering (or none for crisp line art), optional rotation of wide panels, and manga order.
+- Each original page becomes a chapter, so the Picco's chapter menu can jump to it.
+- Save the file, share it, or **send it over Wi-Fi** to the Picco's file transfer screen (CrossPoint's `/upload` API).
+- For EPUBs, **Optimize for Picco** shrinks and grays the images so the Picco opens the book quickly.
+
+The format and every pixel step are defined in [`docs/picco-export-spec.md`](docs/picco-export-spec.md), shared with InkSync Pro (iOS). [`tools/picco_reference.py`](tools/picco_reference.py) is a reference implementation; the unit tests check that this app produces exactly its fixture files, byte for byte.
+
 ## Limitations
 
 - EPUB: tables, SVG drawings and publisher CSS aren't rendered; DRM-protected books can't be opened.
 - Password-protected RAR/7z comics aren't supported.
 - The pen layer, refresh and comic unpacking need testing on a real Note Air 4C; none of it can be exercised in the emulator.
+- Picco files and Wi-Fi sending are built from CrossPoint's documented format and API but haven't been tried on a Picco yet; Boox's firmware fork may differ.
 
 ## Building
 

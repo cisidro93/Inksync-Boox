@@ -131,6 +131,7 @@ For each source page *i*, in source order:
      - Otherwise use the **auto grid**: exactly 2 cells.
    - Add a chapter record named `Page {i+1}` covering this source page's output pages.
 4. Whole-page exports have no chapters.
+5. Panels drawn on the uncropped page (InkSync Pro's Panel Editor): for a page that has such panels, auto-crop and spread splitting are turned off for that page only, so its base is the whole page and the panels apply as normalized rectangles. InkSync Boox's tier grid is applied per base instead, so it doesn't need this rule.
 
 **Merging small panels.** Panels are normalized rectangles (0–1) relative to their half or page, in reading order. Work through them in order:
 - A panel whose area is under 8% (`area × 100 < 8`) is joined to the previous kept panel; the result is the smallest rectangle containing both.
