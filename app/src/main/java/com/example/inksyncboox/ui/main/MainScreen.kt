@@ -106,10 +106,13 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+private val COMIC_EXTENSIONS = listOf(".cbz", ".zip", ".cbr", ".rar", ".cb7", ".7z")
+
 private fun guessKind(name: String, mime: String): DocKind = when {
     name.endsWith(".epub") || mime.contains("epub") -> DocKind.EPUB
-    name.endsWith(".cbz") || name.endsWith(".zip") || mime.contains("cbz") ||
-        mime.contains("comicbook") || mime.contains("zip") -> DocKind.CBZ
+    name.endsWith(".pdf") || mime.contains("pdf") -> DocKind.PDF
+    COMIC_EXTENSIONS.any { name.endsWith(it) } || mime.contains("cbz") || mime.contains("cbr") ||
+        mime.contains("comicbook") || mime.contains("zip") || mime.contains("rar") || mime.contains("7z") -> DocKind.CBZ
     else -> DocKind.PDF
 }
 
@@ -138,7 +141,7 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                     viewModel.onEpubOpened(uri.toString(), book)
                 }
                 DocKind.CBZ -> {
-                    val pages = engine.openCbz(uri)
+                    val pages = engine.openComic(uri)
                     viewModel.onFixedDocumentOpened(uri.toString(), name, DocKind.CBZ, pages)
                 }
                 DocKind.PDF -> {
@@ -174,8 +177,14 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                 "application/pdf",
                 "application/epub+zip",
                 "application/vnd.comicbook+zip",
+                "application/vnd.comicbook-rar",
                 "application/x-cbz",
+                "application/x-cbr",
+                "application/x-cb7",
                 "application/zip",
+                "application/vnd.rar",
+                "application/x-rar-compressed",
+                "application/x-7z-compressed",
                 "application/octet-stream"
             )
         )

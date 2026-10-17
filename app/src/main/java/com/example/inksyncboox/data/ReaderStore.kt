@@ -12,7 +12,8 @@ import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 
-enum class DocKind { PDF, CBZ, EPUB }
+/** Document type. CBZ covers every comic archive (CBZ, CBR, CB7); the name is kept for saved data. */
+enum class DocKind(val label: String) { PDF("PDF"), CBZ("Comic"), EPUB("EPUB") }
 
 /** A document the user has opened, with where they left off. */
 data class RecentDocument(

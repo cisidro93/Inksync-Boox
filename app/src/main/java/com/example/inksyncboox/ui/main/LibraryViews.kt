@@ -91,7 +91,7 @@ private fun KindBadge(kind: DocKind) {
             .border(1.dp, EInkPureBlack, RoundedCornerShape(4.dp))
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
-        Text(kind.name, color = EInkPureBlack, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(kind.label, color = EInkPureBlack, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -120,7 +120,7 @@ fun LibraryScreen(
                 modifier = Modifier.weight(1f)
             )
             if (state.document != null) {
-                EInkActionPill(label = "Back to ${state.document.kind.name}", isSelected = false, onClick = onBackToReader)
+                EInkActionPill(label = "Back to ${state.document.kind.label}", isSelected = false, onClick = onBackToReader)
                 Spacer(Modifier.width(12.dp))
             }
             EInkActionPill(label = "Open file", isSelected = true, onClick = onOpenFile)
@@ -157,7 +157,7 @@ fun LibraryScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "Open a PDF, EPUB, or CBZ to start reading.",
+                    "Open a PDF, EPUB, or comic (CBZ, CBR, CB7) to start reading.",
                     color = EInkPureBlack,
                     fontSize = 18.sp
                 )

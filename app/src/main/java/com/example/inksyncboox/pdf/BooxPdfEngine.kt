@@ -22,7 +22,8 @@ import java.util.zip.ZipFile
 import kotlin.math.roundToInt
 
 /**
- * Fixed-page document engine for `.pdf` (Android [PdfRenderer]) and `.cbz` (zip of images).
+ * Fixed-page document engine for `.pdf` (Android [PdfRenderer]) and comic archives
+ * (`.cbz` zip, plus `.cbr` RAR and `.cb7` 7-Zip via [ComicArchiveExtractor]).
  *
  * Pages are rendered region-by-region at the size they will be shown, so zooming into a
  * NeoFlow tier or comic panel stays sharp on the Note Air 4C's 300 PPI panel instead of
@@ -30,7 +31,7 @@ import kotlin.math.roundToInt
  */
 class BooxPdfEngine(private val context: Context) {
 
-    private enum class SourceKind { NONE, PDF, CBZ }
+    private enum class SourceKind { NONE, PDF, CBZ, EXTRACTED }
 
     private val renderMutex = Mutex()
     private var sourceKind = SourceKind.NONE
@@ -38,6 +39,7 @@ class BooxPdfEngine(private val context: Context) {
     private var pdfRenderer: PdfRenderer? = null
     private var cbzZip: ZipFile? = null
     private var cbzEntries: List<String> = emptyList()
+    private var extractedPages: List<File> = emptyList()
 
     // The most recently decoded CBZ page, so panning between panels doesn't re-read the zip.
     private var cachedCbzPage: Int = -1
@@ -74,40 +76,59 @@ class BooxPdfEngine(private val context: Context) {
         }
     }
 
+    private fun isComicImage(name: String): Boolean {
+        val lower = name.lowercase()
+        return !lower.contains("__macosx") &&
+            !lower.substringAfterLast('/').startsWith(".") &&
+            IMAGE_EXTENSIONS.any { lower.endsWith(it) }
+    }
+
     /**
-     * Opens a `.cbz` (or `.zip`) comic archive. The archive is copied into the app cache once so
-     * pages can be read with random access. Image pages are ordered by natural sort
-     * (`page2.jpg` before `page10.jpg`).
+     * Opens a comic archive: `.cbz`/`.zip` directly, or `.cbr` (RAR, including RAR5) and
+     * `.cb7` (7-Zip) by unpacking it once. The archive is copied into the app cache first.
+     * Pages are ordered by natural sort (`page2.jpg` before `page10.jpg`).
      */
-    suspend fun openCbz(uri: Uri): Int = withContext(Dispatchers.IO) {
+    suspend fun openComic(uri: Uri): Int = withContext(Dispatchers.IO) {
         renderMutex.withLock {
             closeInternal()
-            val cacheFile = File(context.cacheDir, "active_comic.cbz")
+            val cacheFile = File(context.cacheDir, "active_comic.bin")
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(cacheFile).use { output -> input.copyTo(output, 64 * 1024) }
             } ?: error("Could not open file")
 
-            val zip = ZipFile(cacheFile)
-            val images = zip.entries().toList().asSequence()
-                .filter { !it.isDirectory }
-                .map { it.name }
-                .filter { name ->
-                    val lower = name.lowercase()
-                    !lower.contains("__macosx") &&
-                        !lower.substringAfterLast('/').startsWith(".") &&
-                        IMAGE_EXTENSIONS.any { lower.endsWith(it) }
+            if (ComicArchiveExtractor.detect(cacheFile) == ComicArchiveExtractor.Format.ZIP) {
+                val zip = ZipFile(cacheFile)
+                val images = zip.entries().toList()
+                    .filter { !it.isDirectory && isComicImage(it.name) }
+                    .map { it.name }
+                    .sortedWith { a, b -> compareNaturalOrder(a, b) }
+                if (images.isEmpty()) {
+                    zip.close()
+                    error("No images found in this archive")
                 }
-                .sortedWith { a, b -> compareNaturalOrder(a, b) }
-                .toList()
-
-            if (images.isEmpty()) {
-                zip.close()
-                error("No images found in this archive")
+                cbzZip = zip
+                cbzEntries = images
+                sourceKind = SourceKind.CBZ
+                pageCount = images.size
+            } else {
+                val extracted = try {
+                    ComicArchiveExtractor.extractImages(
+                        archive = cacheFile,
+                        outDir = File(context.cacheDir, "comic-pages"),
+                        isImage = this::isComicImage
+                    )
+                } catch (t: Throwable) {
+                    error("This archive couldn't be read (${t.message ?: "unsupported format"}).")
+                } finally {
+                    cacheFile.delete() // pages are unpacked; the archive copy isn't needed
+                }
+                if (extracted.isEmpty()) error("No images found in this archive")
+                extractedPages = extracted.keys
+                    .sortedWith { a, b -> compareNaturalOrder(a, b) }
+                    .map { extracted.getValue(it) }
+                sourceKind = SourceKind.EXTRACTED
+                pageCount = extractedPages.size
             }
-            cbzZip = zip
-            cbzEntries = images
-            sourceKind = SourceKind.CBZ
-            pageCount = images.size
             pageCount
         }
     }
@@ -126,7 +147,7 @@ class BooxPdfEngine(private val context: Context) {
             when (sourceKind) {
                 SourceKind.NONE -> null
                 SourceKind.PDF -> renderPdfRegion(pageIndex, region, targetWidthPx, targetHeightPx)
-                SourceKind.CBZ -> renderCbzRegion(pageIndex, region, targetWidthPx, targetHeightPx)
+                SourceKind.CBZ, SourceKind.EXTRACTED -> renderCbzRegion(pageIndex, region, targetWidthPx, targetHeightPx)
             }
         }
     }
@@ -168,9 +189,13 @@ class BooxPdfEngine(private val context: Context) {
     @Suppress("DEPRECATION")
     private fun cbzDecoderFor(pageIndex: Int): BitmapRegionDecoder? {
         if (pageIndex == cachedCbzPage && cachedCbzDecoder != null) return cachedCbzDecoder
-        val zip = cbzZip ?: return null
-        val entry = zip.getEntry(cbzEntries.getOrNull(pageIndex) ?: return null) ?: return null
-        val bytes = zip.getInputStream(entry).use { it.readBytes() }
+        val bytes = if (sourceKind == SourceKind.EXTRACTED) {
+            extractedPages.getOrNull(pageIndex)?.readBytes() ?: return null
+        } else {
+            val zip = cbzZip ?: return null
+            val entry = zip.getEntry(cbzEntries.getOrNull(pageIndex) ?: return null) ?: return null
+            zip.getInputStream(entry).use { it.readBytes() }
+        }
         cachedCbzDecoder?.recycle()
         cachedCbzDecoder = try {
             BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false)
@@ -226,6 +251,7 @@ class BooxPdfEngine(private val context: Context) {
         fileDescriptor = null
         cbzZip = null
         cbzEntries = emptyList()
+        extractedPages = emptyList()
         sourceKind = SourceKind.NONE
         pageCount = 0
     }

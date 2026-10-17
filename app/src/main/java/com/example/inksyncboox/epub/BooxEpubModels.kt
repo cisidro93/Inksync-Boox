@@ -21,8 +21,14 @@ data class EpubParagraph(
     val text: String,
     val isHeading: Boolean = false,
     val isBlockQuote: Boolean = false,
-    val spans: List<EpubInlineSpan> = emptyList()
-)
+    val spans: List<EpubInlineSpan> = emptyList(),
+    /** Set for image blocks: file in the app cache, and its pixel size. [text] holds the alt text. */
+    val imagePath: String? = null,
+    val imageWidth: Int = 0,
+    val imageHeight: Int = 0
+) {
+    val isImage: Boolean get() = imagePath != null
+}
 
 data class EpubChapter(
     val index: Int,

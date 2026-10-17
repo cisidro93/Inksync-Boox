@@ -78,4 +78,7 @@ dependencies {
 
   // Lets the Boox e-ink refresh call reach Onyx's non-SDK View methods (Android hidden-API rules)
   implementation(libs.hiddenapibypass)
+
+  // libarchive for CBR (RAR4/RAR5) and CB7 comics
+  implementation(libs.libarchive)
 }

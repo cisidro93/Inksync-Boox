@@ -1,6 +1,7 @@
 package com.example.inksyncboox.epub
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.graphics.Typeface
 import android.text.Html
@@ -10,6 +11,7 @@ import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 
@@ -23,9 +25,19 @@ import kotlin.math.max
  * 4. Extracts and strips/normalizes XHTML chapter bodies into `EpubChapter` and `EpubParagraph` blocks
  *    with deterministic paragraph IDs (`chX_pY`) so highlights stay attached, keeping bold/italic runs.
  *
- * Limitations: images, tables and CSS layout are not rendered; DRM-protected books are not supported.
+ * Images (`<img>` and SVG `<image>`) are copied to a per-book cache folder and become image blocks.
+ *
+ * Limitations: tables, SVG drawings and publisher CSS are not rendered; DRM-protected books are not supported.
  */
 object RealEpubParser {
+
+    /** An image extracted to disk, with its pixel size. */
+    data class ExtractedImage(val path: String, val width: Int, val height: Int)
+
+    private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+
+    /** Smallest image (in pixels, either side) treated as content rather than a spacer. */
+    private const val MIN_IMAGE_PX = 16
 
     suspend fun parseEpubFromUri(
         context: Context,
@@ -33,6 +45,14 @@ object RealEpubParser {
         fallbackFileName: String = "Imported Book.epub"
     ): EpubBookDocument? = withContext(Dispatchers.IO) {
         val entries = mutableMapOf<String, ByteArray>()
+        val bookId = "epub_${uri.toString().hashCode()}"
+
+        // Keep only the current book's images in the cache.
+        val imagesRoot = File(context.cacheDir, "epub-images")
+        val imageDir = File(imagesRoot, bookId)
+        imagesRoot.listFiles()?.filter { it.name != bookId }?.forEach { it.deleteRecursively() }
+        imageDir.mkdirs()
+        val images = mutableMapOf<String, ExtractedImage>()
 
         context.contentResolver.openInputStream(uri)?.use { rawStream ->
             ZipInputStream(rawStream).use { zip ->
@@ -52,6 +72,16 @@ object RealEpubParser {
                             val bytes = zip.readBytes()
                             if (bytes.size <= 4 * 1024 * 1024) {
                                 entries[name] = bytes
+                            }
+                        } else if (IMAGE_EXTENSIONS.any { lower.endsWith(it) }) {
+                            val target = File(imageDir, "${images.size}${lower.substring(lower.lastIndexOf('.'))}")
+                            target.outputStream().use { out -> zip.copyTo(out) }
+                            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(target.path, bounds)
+                            if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                                images[name] = ExtractedImage(target.path, bounds.outWidth, bounds.outHeight)
+                            } else {
+                                target.delete()
                             }
                         }
                     }
@@ -98,7 +128,9 @@ object RealEpubParser {
             val extracted = extractChapterFromHtml(
                 htmlBytes = htmlBytes,
                 chapterIndex = chapterIdx,
-                defaultChapterTitle = "Section ${chapterIdx + 1}"
+                defaultChapterTitle = "Section ${chapterIdx + 1}",
+                chapterDir = resolvedPath.substringBeforeLast('/', ""),
+                images = images
             )
             if (extracted != null && extracted.paragraphs.isNotEmpty()) {
                 chapters.add(extracted)
@@ -119,7 +151,9 @@ object RealEpubParser {
                     val extracted = extractChapterFromHtml(
                         htmlBytes = bytes,
                         chapterIndex = chapterIdx,
-                        defaultChapterTitle = key.substringAfterLast('/').substringBeforeLast('.')
+                        defaultChapterTitle = key.substringAfterLast('/').substringBeforeLast('.'),
+                        chapterDir = key.substringBeforeLast('/', ""),
+                        images = images
                     )
                     if (extracted != null && extracted.paragraphs.isNotEmpty()) {
                         chapters.add(extracted)
@@ -131,7 +165,7 @@ object RealEpubParser {
         if (chapters.isEmpty()) return@withContext null
 
         EpubBookDocument(
-            id = "epub_${uri.toString().hashCode()}",
+            id = bookId,
             title = parsedOpf.title.ifBlank { fallbackFileName.removeSuffix(".epub") },
             author = parsedOpf.author,
             chapters = chapters
@@ -289,10 +323,16 @@ object RealEpubParser {
         return out.toString() to spans
     }
 
+    private val IMG_TAG = Regex("(?is)<img\\b[^>]*>|<image\\b[^>]*>")
+    private val SRC_ATTR = Regex("(?is)\\b(?:src|xlink:href|href)\\s*=\\s*[\"']([^\"']+)[\"']")
+    private val ALT_ATTR = Regex("(?is)\\balt\\s*=\\s*[\"']([^\"']*)[\"']")
+
     private fun extractChapterFromHtml(
         htmlBytes: ByteArray,
         chapterIndex: Int,
-        defaultChapterTitle: String
+        defaultChapterTitle: String,
+        chapterDir: String,
+        images: Map<String, ExtractedImage>
     ): EpubChapter? {
         val rawHtml = try {
             decodeHtml(htmlBytes)
@@ -312,29 +352,60 @@ object RealEpubParser {
             htmlToStyledText(it).first
         }?.takeIf { it.isNotBlank() }
 
-        // Split into block-level paragraphs (<p>, <h1>..<h6>, <blockquote>, <li>)
-        val blockMatches = Regex("(?is)<(h[1-6]|p|blockquote|li)\\b[^>]*>(.*?)</\\1>").findAll(cleanedHtml).toList()
-
         val paragraphs = mutableListOf<EpubParagraph>()
 
-        if (blockMatches.isNotEmpty()) {
-            var pIdx = 0
-            for (match in blockMatches) {
+        fun addImage(tag: String) {
+            val src = SRC_ATTR.find(tag)?.groupValues?.getOrNull(1) ?: return
+            if (src.startsWith("data:") || src.startsWith("http")) return
+            val path = resolveRelativePath(chapterDir, Uri.decode(src))
+            val image = images[path]
+                ?: images.entries.firstOrNull { it.key.endsWith(path.substringAfterLast('/')) && path.isNotEmpty() }?.value
+                ?: return
+            if (image.width < MIN_IMAGE_PX || image.height < MIN_IMAGE_PX) return
+            val idx = paragraphs.size
+            paragraphs.add(
+                EpubParagraph(
+                    cfiId = "ch${chapterIndex + 1}_p${idx + 1}",
+                    chapterIndex = chapterIndex,
+                    indexInChapter = idx,
+                    text = ALT_ATTR.find(tag)?.groupValues?.getOrNull(1).orEmpty(),
+                    imagePath = image.path,
+                    imageWidth = image.width,
+                    imageHeight = image.height
+                )
+            )
+        }
+
+        fun addText(tag: String, innerHtml: String) {
+            val (text, spans) = htmlToStyledText(innerHtml)
+            if (text.isEmpty()) return
+            val idx = paragraphs.size
+            paragraphs.add(
+                EpubParagraph(
+                    cfiId = "ch${chapterIndex + 1}_p${idx + 1}",
+                    chapterIndex = chapterIndex,
+                    indexInChapter = idx,
+                    text = text,
+                    isHeading = tag.startsWith("h"),
+                    isBlockQuote = tag == "blockquote",
+                    spans = spans
+                )
+            )
+        }
+
+        // Block-level text (<p>, <h1>..<h6>, <blockquote>, <li>) and images, in document order.
+        val blockOrImage = Regex("(?is)<(h[1-6]|p|blockquote|li)\\b[^>]*>(.*?)</\\1>|<img\\b[^>]*>|<image\\b[^>]*>")
+        val matches = blockOrImage.findAll(cleanedHtml).toList()
+
+        if (matches.isNotEmpty()) {
+            for (match in matches) {
                 val tag = match.groupValues[1].lowercase()
-                val (text, spans) = htmlToStyledText(match.groupValues[2])
-                if (text.isNotEmpty()) {
-                    paragraphs.add(
-                        EpubParagraph(
-                            cfiId = "ch${chapterIndex + 1}_p${pIdx + 1}",
-                            chapterIndex = chapterIndex,
-                            indexInChapter = pIdx,
-                            text = text,
-                            isHeading = tag.startsWith("h"),
-                            isBlockQuote = tag == "blockquote",
-                            spans = spans
-                        )
-                    )
-                    pIdx++
+                if (tag.isEmpty()) {
+                    addImage(match.value)
+                } else {
+                    val inner = match.groupValues[2]
+                    IMG_TAG.findAll(inner).forEach { addImage(it.value) }
+                    addText(tag, inner)
                 }
             }
         } else {
@@ -359,7 +430,7 @@ object RealEpubParser {
 
         if (paragraphs.isEmpty()) return null
 
-        val wordCount = paragraphs.sumOf { it.text.split(' ').size }
+        val wordCount = paragraphs.filter { it.imagePath == null }.sumOf { it.text.split(' ').size }
         val estimatedMins = max(1, wordCount / 220)
 
         return EpubChapter(

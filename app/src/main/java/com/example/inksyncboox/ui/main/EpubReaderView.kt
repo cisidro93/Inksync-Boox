@@ -1,6 +1,8 @@
 package com.example.inksyncboox.ui.main
 
+import android.graphics.BitmapFactory
 import android.view.MotionEvent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,17 +19,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -55,6 +62,8 @@ import com.example.inksyncboox.theme.EInkBorderGray
 import com.example.inksyncboox.theme.EInkMutedText
 import com.example.inksyncboox.theme.EInkPaperWhite
 import com.example.inksyncboox.theme.EInkPureBlack
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.ceil
 
 /** One slice of a paragraph placed in a column: characters [start, end) of paragraph [paragraph]. */
@@ -62,7 +71,10 @@ private data class EpubFragment(
     val paragraph: Int,
     val start: Int,
     val end: Int,
-    val gapBeforePx: Int
+    val gapBeforePx: Int,
+    /** Display size for image blocks; 0 for text. */
+    val imageWidthPx: Int = 0,
+    val imageHeightPx: Int = 0
 )
 
 private class EpubPageLayout(val columns: List<List<EpubFragment>>) {
@@ -150,6 +162,25 @@ private fun paginateChapter(
     }
 
     paragraphs.forEachIndexed { pIdx, para ->
+        if (para.isImage) {
+            // Treat image pixels as dp (roughly how publishers size them), never wider than the
+            // column, and shrink to fit the column height. Images are never split across pages.
+            val aspect = para.imageHeight.toFloat() / para.imageWidth.coerceAtLeast(1)
+            var w = minOf(columnWidthPx.toFloat(), para.imageWidth * density.density)
+            var h = w * aspect
+            if (h > columnHeightPx) {
+                h = columnHeightPx.toFloat()
+                w = h / aspect
+            }
+            var gap = if (current.isEmpty()) 0 else paragraphGapPx
+            if (current.isNotEmpty() && used + gap + h > columnHeightPx) {
+                closeColumn()
+                gap = 0
+            }
+            current += EpubFragment(pIdx, 0, 0, gap, w.toInt().coerceAtLeast(1), h.toInt().coerceAtLeast(1))
+            used += gap + ceil(h).toInt()
+            return@forEachIndexed
+        }
         val indent = if (para.isBlockQuote) blockQuoteIndentPx else 0
         // Measure 2px narrower than we render: a slightly wider render can only fit the same
         // or more text per line, so rendered fragments never need more lines than measured.
@@ -332,6 +363,16 @@ fun EpubReaderView(
                                     if (fragment.gapBeforePx > 0) {
                                         Spacer(Modifier.height(with(density) { fragment.gapBeforePx.toDp() }))
                                     }
+                                    if (para.isImage) {
+                                        EpubImage(
+                                            path = para.imagePath.orEmpty(),
+                                            description = para.text,
+                                            widthPx = fragment.imageWidthPx,
+                                            heightPx = fragment.imageHeightPx,
+                                            onClick = { dispatchTap() }
+                                        )
+                                        return@forEach
+                                    }
                                     BasicText(
                                         text = texts[fragment.paragraph].subSequence(fragment.start, fragment.end),
                                         style = styleFor(para, preset),
@@ -365,6 +406,51 @@ fun EpubReaderView(
                 fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+/** Decodes an EPUB image at roughly its display size (keeps memory low) and shows it centered. */
+@Composable
+private fun EpubImage(
+    path: String,
+    description: String,
+    widthPx: Int,
+    heightPx: Int,
+    onClick: () -> Unit
+) {
+    val density = LocalDensity.current
+    val bitmap by produceState<android.graphics.Bitmap?>(null, path, widthPx) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, bounds)
+                var sample = 1
+                while (bounds.outWidth / (sample * 2) >= widthPx && widthPx > 0) sample *= 2
+                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(with(density) { heightPx.toDp() })
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        bitmap?.let {
+            Image(
+                bitmap = it.asImageBitmap(),
+                contentDescription = description.ifEmpty { null },
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(with(density) { widthPx.toDp() }, with(density) { heightPx.toDp() })
             )
         }
     }
