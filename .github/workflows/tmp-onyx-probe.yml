@@ -7,8 +7,23 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-java@v4
+        with: { java-version: '17', distribution: temurin }
       - run: |
-          for a in onyxsdk-device onyxsdk-pen onyxsdk-base; do
-            body=$(curl -sSL -m 30 "http://repo.boox.com/repository/maven-public/com/onyx/android/sdk/$a/maven-metadata.xml" 2>&1 | tr -d '\r' | grep -oE '<(latest|release|version|lastUpdated)>[^<]*' | sed 's/<//' | tr '\n' ' ')
-            echo "::notice title=$a::${body:-EMPTY}"
-          done
+          set +e
+          B=http://repo.boox.com/repository/maven-public/com/onyx/android/sdk
+          note() { msg=$(printf '%s' "$2" | head -c 3800 | sed ':a;N;$!ba;s/\n/%0A/g'); echo "::notice title=$1::$msg"; }
+          curl -sSL -o dev.pom $B/onyxsdk-device/1.3.6/onyxsdk-device-1.3.6.pom
+          note pom "$(grep -E '<(groupId|artifactId|version|scope)>' dev.pom | tr -d ' ' | paste -sd' ')"
+          curl -sSL -o dev.aar $B/onyxsdk-device/1.3.6/onyxsdk-device-1.3.6.aar
+          mkdir aar && cd aar && unzip -q ../dev.aar && unzip -q classes.jar -d cls && cd ..
+          note manifest "$(cat aar/AndroidManifest.xml | head -c 1500)"
+          note classes "$(cd aar/cls && find . -name '*.class' | grep -iE 'epd|device/(Device|Onyx|Base)' | grep -v '\$' | head -60 | paste -sd' ')"
+          F=$(cd aar/cls && find . -path '*api/device/epd/EpdController.class')
+          note epd_methods "$(javap -cp aar/cls ${F%.class} 2>&1 | grep -E 'static' | sed 's/public static //' | head -70)"
+          note updatemode "$(javap -cp aar/cls com.onyx.android.sdk.api.device.epd.UpdateMode 2>&1 | head -40 | paste -sd' ')"
+          # Which framework View methods does the device layer look up reflectively?
+          note view_strings "$(grep -rhoaE '(refreshScreen|setWaveformAndScheme|requestEpdMode|setViewDefaultUpdateMode|applyApplicationFastMode|invalidate|repaintEverything|setUpdateMode|enableScreenUpdate|setSystemUpdateModeAndScheme|getMethod|android\.view\.View|android\.onyx\.[A-Za-z.]+)' aar/cls | sort | uniq -c | sort -rn | head -40 | paste -sd' ')"
+          note device_impls "$(cd aar/cls && find . -name '*Device*.class' | grep -v '\$' | paste -sd' ')"
+          Q=$(cd aar/cls && find . -iname '*Qualcomm*Device*.class' -o -iname 'SDMDevice*.class' | grep -v '\$' | head -1)
+          note qcom_methods "$(javap -p -cp aar/cls ${Q%.class} 2>&1 | grep -iE 'refresh|invalidate|update|waveform' | head -40)"
