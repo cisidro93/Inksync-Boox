@@ -9,5 +9,6 @@ jobs:
     steps:
       - run: |
           for a in onyxsdk-device onyxsdk-pen onyxsdk-base; do
-            echo "=== $a"; curl -sSL -m 30 "http://repo.boox.com/repository/maven-public/com/onyx/android/sdk/$a/maven-metadata.xml" | head -60
+            body=$(curl -sSL -m 30 "http://repo.boox.com/repository/maven-public/com/onyx/android/sdk/$a/maven-metadata.xml" 2>&1 | tr -d '\r' | grep -oE '<(latest|release|version|lastUpdated)>[^<]*' | sed 's/<//' | tr '\n' ' ')
+            echo "::notice title=$a::${body:-EMPTY}"
           done
