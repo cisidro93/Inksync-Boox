@@ -312,174 +312,111 @@ internal fun BooxWorkspaceContent(
     onToggleHighContrast: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isLibraryOrBinder = state.workspaceMode == BooxWorkspaceMode.SANCTUARY_SHELF ||
+    var showReaderOverlayMenu by remember { mutableStateOf(false) }
+    var lastReaderMode by remember { mutableStateOf(BooxWorkspaceMode.PDF_NEOFLOW) }
+    if (state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW ||
+        state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS ||
+        state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB
+    ) {
+        lastReaderMode = state.workspaceMode
+    }
+
+    val isModalSheetOpen = state.workspaceMode == BooxWorkspaceMode.SANCTUARY_SHELF ||
         state.workspaceMode == BooxWorkspaceMode.STUDY_BINDER
 
-    var showReaderOverlayMenu by remember { mutableStateOf(false) }
-    var isFloatingStylusExpanded by remember { mutableStateOf(false) }
-
-    if (isLibraryOrBinder) {
-        // =========================================================================
-        // 1. BOOX OS 4.0 LIBRARY & STUDY BINDER SHELL (LEFT SIDEBAR + FULL SHELF)
-        // =========================================================================
-        Row(
-            modifier = modifier
-                .fillMaxSize()
-                .background(EInkSurfaceGray)
-        ) {
-            BooxLeftNavigationRail(
-                state = state,
-                onSelectWorkspaceMode = { mode ->
-                    showReaderOverlayMenu = false
-                    onSelectWorkspaceMode(mode)
-                },
-                onToggleCornellSplit = onToggleCornellSplit,
-                onManualRegalFlash = onManualRegalFlash,
-                onOpenPdfClick = onOpenPdfClick
-            )
-
+    // =========================================================================
+    // 100% FULL-SCREEN BOOK / PDF / COMIC CANVAS ON EVERY UI
+    // - When showReaderOverlayMenu == false: 100.0% of the screen is ONLY the book.
+    //   Zero top bars, zero bottom bars, zero sidebars, zero floating buttons.
+    // - Tapping the center of the screen activates/hides the floating Overlay HUD.
+    // =========================================================================
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(EInkPaperWhite)
+    ) {
+        // 1. ALWAYS-ON 100% FULL-SCREEN BOOK LAYER (Edge-to-Edge)
+        Row(modifier = Modifier.fillMaxSize()) {
             Box(
                 modifier = Modifier
-                    .width(1.dp)
+                    .weight(if (state.showCornellSplitScratchpad) 0.62f else 1f)
                     .fillMaxHeight()
-                    .background(EInkBorderGray)
-            )
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .background(EInkPaperWhite)
             ) {
-                when (state.workspaceMode) {
-                    BooxWorkspaceMode.SANCTUARY_SHELF -> {
-                        BooxSanctuaryShelfView(
-                            state = state,
-                            onSelectMode = { mode ->
+                when (lastReaderMode) {
+                    BooxWorkspaceMode.PANELS_COMICS,
+                    BooxWorkspaceMode.PDF_NEOFLOW -> {
+                        BooxPdfNeoFlowViewport(
+                            state = state.copy(workspaceMode = lastReaderMode),
+                            pageBitmap = pageBitmap,
+                            showOverlayBadges = showReaderOverlayMenu || state.isStudioGridEditMode,
+                            onStepPrev = {
                                 showReaderOverlayMenu = false
-                                onSelectWorkspaceMode(mode)
+                                onStepPrev()
                             },
-                            onOpenLocalPdf = onOpenPdfClick,
-                            onDismissWelcomeBanner = onDismissWelcomeBanner,
-                            onJumpToCard = onJumpToStudyCard
+                            onStepNext = {
+                                showReaderOverlayMenu = false
+                                onStepNext()
+                            },
+                            onSelectBlock = onSelectBlock,
+                            onUpdateColSplit = onUpdateColSplit,
+                            onUpdateRowSplit = onUpdateRowSplit,
+                            onCommitStroke = onCommitStroke,
+                            onCommitQuadHighlight = onCommitQuadHighlight,
+                            onErasePoint = onErasePoint,
+                            onToggleReaderOverlay = {
+                                showReaderOverlayMenu = !showReaderOverlayMenu
+                            }
                         )
                     }
-                    BooxWorkspaceMode.STUDY_BINDER -> {
-                        BooxStudyHubBinderView(
+                    BooxWorkspaceMode.KINDLE_EPUB -> {
+                        BooxKindleEpubReaderView(
                             state = state,
-                            onJumpToCard = onJumpToStudyCard,
-                            onExportSidecars = onUpdateSidecarExportStatus
+                            onCycleTypography = onCycleEpubTypography,
+                            onToggleTwoColumn = onToggleEpubTwoColumn,
+                            onToggleParagraphHighlight = onToggleEpubParagraphHighlight,
+                            onStepPrevChapter = {
+                                showReaderOverlayMenu = false
+                                onStepPrev()
+                            },
+                            onStepNextChapter = {
+                                showReaderOverlayMenu = false
+                                onStepNext()
+                            },
+                            onToggleReaderOverlay = {
+                                showReaderOverlayMenu = !showReaderOverlayMenu
+                            }
                         )
                     }
                     else -> Unit
                 }
             }
-        }
-    } else {
-        // =========================================================================
-        // 2. 100% FULL-SCREEN EDGE-TO-EDGE NEOREADER V3 CANVAS
-        //    Zero permanent sidebars, zero outer padding, zero boxy borders.
-        //    - Center-Tap toggles Floating Top & Bottom NeoReader V3 Overlays
-        //    - Left 24% / Right 24% Tap steps backward/forward
-        //    - Right-Edge Collapsible Floating Wacom Stylus Pill (✒)
-        //    - 20.dp Whisper-Quiet Micro Footer at bottom edge
-        // =========================================================================
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(EInkPaperWhite)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                // Full-Bleed Reader Row (100% width, or Split-Screen with Cornell Notes)
-                Row(
+
+            if (state.showCornellSplitScratchpad) {
+                Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(if (state.showCornellSplitScratchpad) 0.62f else 1f)
-                            .fillMaxHeight()
-                    ) {
-                        when (state.workspaceMode) {
-                            BooxWorkspaceMode.PANELS_COMICS,
-                            BooxWorkspaceMode.PDF_NEOFLOW -> {
-                                BooxPdfNeoFlowViewport(
-                                    state = state,
-                                    pageBitmap = pageBitmap,
-                                    onStepPrev = {
-                                        showReaderOverlayMenu = false
-                                        onStepPrev()
-                                    },
-                                    onStepNext = {
-                                        showReaderOverlayMenu = false
-                                        onStepNext()
-                                    },
-                                    onSelectBlock = onSelectBlock,
-                                    onUpdateColSplit = onUpdateColSplit,
-                                    onUpdateRowSplit = onUpdateRowSplit,
-                                    onCommitStroke = onCommitStroke,
-                                    onCommitQuadHighlight = onCommitQuadHighlight,
-                                    onErasePoint = onErasePoint,
-                                    onToggleReaderOverlay = {
-                                        showReaderOverlayMenu = !showReaderOverlayMenu
-                                    }
-                                )
-                            }
-                            BooxWorkspaceMode.KINDLE_EPUB -> {
-                                BooxKindleEpubReaderView(
-                                    state = state,
-                                    onCycleTypography = onCycleEpubTypography,
-                                    onToggleTwoColumn = onToggleEpubTwoColumn,
-                                    onToggleParagraphHighlight = onToggleEpubParagraphHighlight,
-                                    onStepPrevChapter = {
-                                        showReaderOverlayMenu = false
-                                        onStepPrev()
-                                    },
-                                    onStepNextChapter = {
-                                        showReaderOverlayMenu = false
-                                        onStepNext()
-                                    },
-                                    onToggleReaderOverlay = {
-                                        showReaderOverlayMenu = !showReaderOverlayMenu
-                                    }
-                                )
-                            }
-                            else -> Unit
-                        }
-                    }
-
-                    if (state.showCornellSplitScratchpad) {
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .fillMaxHeight()
-                                .background(EInkPureBlack)
-                        )
-                        BooxCornellScratchpadPane(
-                            state = state,
-                            onCycleTemplate = onCycleCornellTemplate,
-                            onCommitScratchpadStroke = onCommitCornellStroke,
-                            onClearScratchpad = onClearCornellScratchpad,
-                            modifier = Modifier
-                                .weight(0.38f)
-                                .fillMaxHeight()
-                        )
-                    }
-                }
-
-                // Whisper-Quiet 20.dp NeoReader V3 Micro Status Bar at Bottom Edge
-                BooxFullScreenMicroStatusBar(
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(EInkPureBlack)
+                )
+                BooxCornellScratchpadPane(
                     state = state,
-                    onClickStatusBar = { showReaderOverlayMenu = !showReaderOverlayMenu }
+                    onCycleTemplate = onCycleCornellTemplate,
+                    onCommitScratchpadStroke = onCommitCornellStroke,
+                    onClearScratchpad = onClearCornellScratchpad,
+                    modifier = Modifier
+                        .weight(0.38f)
+                        .fillMaxHeight()
                 )
             }
+        }
 
-            // Collapsible Right-Edge Floating Wacom Stylus Pill (Boox Notes 4.0 Style)
+        // 2. ACTIVATABLE & HIDABLE FLOATING OVERLAY HUD (Appears ONLY when activated)
+        if (showReaderOverlayMenu || isModalSheetOpen) {
+            // Floating Right-Edge Wacom Stylus Pill (Part of the Overlay so Full Screen stays 100% clean when hidden)
             BooxFloatingStylusEdgePill(
                 state = state,
-                isExpanded = isFloatingStylusExpanded,
-                onToggleExpanded = { isFloatingStylusExpanded = !isFloatingStylusExpanded },
+                isExpanded = true,
+                onToggleExpanded = { showReaderOverlayMenu = false },
                 onSelectTool = onSelectTool,
                 onSelectSwatch = onSelectSwatch,
                 onTogglePalmShield = onTogglePalmShield,
@@ -487,43 +424,125 @@ internal fun BooxWorkspaceContent(
                 onClearAnnotations = onClearAnnotations,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 8.dp)
+                    .padding(end = 12.dp)
             )
 
-            // Center-Tap Floating NeoReader V3 Top & Bottom Overlay Menus
-            if (showReaderOverlayMenu) {
-                BooxFloatingNeoReaderOverlay(
-                    state = state,
-                    onDismissOverlay = { showReaderOverlayMenu = false },
-                    onReturnToLibrary = {
-                        showReaderOverlayMenu = false
+            // Floating Top & Bottom NeoReader V3 Overlay Bars
+            BooxFloatingNeoReaderOverlay(
+                state = state,
+                onDismissOverlay = {
+                    showReaderOverlayMenu = false
+                    if (isModalSheetOpen) {
+                        onSelectWorkspaceMode(lastReaderMode)
+                    }
+                },
+                onReturnToLibrary = {
+                    if (state.workspaceMode == BooxWorkspaceMode.SANCTUARY_SHELF) {
+                        onSelectWorkspaceMode(lastReaderMode)
+                    } else {
                         onSelectWorkspaceMode(BooxWorkspaceMode.SANCTUARY_SHELF)
-                    },
-                    onOpenStudyBinder = {
-                        showReaderOverlayMenu = false
+                    }
+                },
+                onOpenStudyBinder = {
+                    if (state.workspaceMode == BooxWorkspaceMode.STUDY_BINDER) {
+                        onSelectWorkspaceMode(lastReaderMode)
+                    } else {
                         onSelectWorkspaceMode(BooxWorkspaceMode.STUDY_BINDER)
-                    },
-                    onSelectWorkspaceMode = onSelectWorkspaceMode,
-                    onToggleCornellSplit = onToggleCornellSplit,
-                    onManualRegalFlash = onManualRegalFlash,
-                    onOpenPdfClick = onOpenPdfClick,
-                    onSelectPreset = onSelectPreset,
-                    onSelectFlow = onSelectFlow,
-                    onToggleStudioEdit = onToggleStudioEdit,
-                    onToggleZoomTier = onToggleZoomTier,
-                    onTogglePanelsSpotlight = onTogglePanelsSpotlight,
-                    onTogglePanelsSpread = onTogglePanelsSpread,
-                    onTogglePanelsBleed = onTogglePanelsBleed,
-                    onToggleKaleidoBoost = onToggleKaleidoBoost,
-                    onToggleMarginTrim = onToggleMarginTrim,
-                    onResetGridSplits = onResetGridSplits,
-                    onCycleEpubTypography = onCycleEpubTypography,
-                    onToggleEpubTwoColumn = onToggleEpubTwoColumn,
-                    onCycleRefreshMode = onCycleRefreshMode,
-                    onToggleHighContrast = onToggleHighContrast,
-                    onStepPrev = onStepPrev,
-                    onStepNext = onStepNext
-                )
+                    }
+                },
+                onSelectWorkspaceMode = { mode ->
+                    onSelectWorkspaceMode(mode)
+                },
+                onToggleCornellSplit = onToggleCornellSplit,
+                onManualRegalFlash = onManualRegalFlash,
+                onOpenPdfClick = onOpenPdfClick,
+                onSelectPreset = onSelectPreset,
+                onSelectFlow = onSelectFlow,
+                onToggleStudioEdit = onToggleStudioEdit,
+                onToggleZoomTier = onToggleZoomTier,
+                onTogglePanelsSpotlight = onTogglePanelsSpotlight,
+                onTogglePanelsSpread = onTogglePanelsSpread,
+                onTogglePanelsBleed = onTogglePanelsBleed,
+                onToggleKaleidoBoost = onToggleKaleidoBoost,
+                onToggleMarginTrim = onToggleMarginTrim,
+                onResetGridSplits = onResetGridSplits,
+                onCycleEpubTypography = onCycleEpubTypography,
+                onToggleEpubTwoColumn = onToggleEpubTwoColumn,
+                onCycleRefreshMode = onCycleRefreshMode,
+                onToggleHighContrast = onToggleHighContrast,
+                onStepPrev = onStepPrev,
+                onStepNext = onStepNext
+            )
+
+            // Optional Floating Library / Study Binder Modal Sheet over the Full-Screen Book
+            if (isModalSheetOpen) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth(0.88f)
+                        .fillMaxHeight(0.76f),
+                    shape = RoundedCornerShape(16.dp),
+                    color = EInkPaperWhite,
+                    border = BorderStroke(2.dp, EInkPureBlack)
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(EInkSurfaceGray)
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (state.workspaceMode == BooxWorkspaceMode.SANCTUARY_SHELF) {
+                                    "LIBRARY DRAWER OVERLAY (BOOK REMAINS FULL SCREEN BEHIND)"
+                                } else {
+                                    "STUDY BINDER OVERLAY (BOOK REMAINS FULL SCREEN BEHIND)"
+                                },
+                                color = EInkPureBlack,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            EInkActionPill(
+                                label = "Close Overlay ✕",
+                                isSelected = true,
+                                onClick = {
+                                    showReaderOverlayMenu = false
+                                    onSelectWorkspaceMode(lastReaderMode)
+                                }
+                            )
+                        }
+                        HorizontalDivider(thickness = 1.5.dp, color = EInkPureBlack)
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (state.workspaceMode == BooxWorkspaceMode.SANCTUARY_SHELF) {
+                                BooxSanctuaryShelfView(
+                                    state = state,
+                                    onSelectMode = { mode ->
+                                        showReaderOverlayMenu = false
+                                        onSelectWorkspaceMode(mode)
+                                    },
+                                    onOpenLocalPdf = onOpenPdfClick,
+                                    onDismissWelcomeBanner = onDismissWelcomeBanner,
+                                    onJumpToCard = { card ->
+                                        showReaderOverlayMenu = false
+                                        onJumpToStudyCard(card)
+                                    }
+                                )
+                            } else {
+                                BooxStudyHubBinderView(
+                                    state = state,
+                                    onJumpToCard = { card ->
+                                        showReaderOverlayMenu = false
+                                        onJumpToStudyCard(card)
+                                    },
+                                    onExportSidecars = onUpdateSidecarExportStatus
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -833,6 +852,7 @@ private fun NeoFlowControlStrip(
 private fun BooxPdfNeoFlowViewport(
     state: BooxReaderState,
     pageBitmap: Bitmap?,
+    showOverlayBadges: Boolean = false,
     onStepPrev: () -> Unit,
     onStepNext: () -> Unit,
     onSelectBlock: (Int, Boolean) -> Unit,
@@ -1031,9 +1051,6 @@ private fun BooxPdfNeoFlowViewport(
                 val srcWidth = (viewportRect.width * pageBitmap.width).roundToInt().coerceIn(1, pageBitmap.width - srcLeft)
                 val srcHeight = (viewportRect.height * pageBitmap.height).roundToInt().coerceIn(1, pageBitmap.height - srcTop)
 
-                // Kaleido 3 Optical Contrast & Shadow Un-Crush LUT:
-                // 1.12x contrast gain + slight shadow lift so dark comic panels don't crush to black
-                // and dingy off-white PDF backgrounds clip cleanly to pure #FFFFFF.
                 val kaleidoLutFilter = if (state.kaleidoOpticalBoost) {
                     ColorFilter.colorMatrix(
                         ColorMatrix(
@@ -1158,21 +1175,24 @@ private fun BooxPdfNeoFlowViewport(
                         )
                     }
 
-                    drawRect(
-                        color = when {
-                            isSelected && isPanelsMode -> Color(0xFFFACC15)
-                            isSelected -> EInkPureBlack
-                            else -> EInkBorderGray
-                        },
-                        topLeft = tl,
-                        size = panelSize,
-                        style = Stroke(width = if (isSelected) 4f else 1.5f)
-                    )
+                    if (showOverlayBadges || isSelected) {
+                        drawRect(
+                            color = when {
+                                isSelected && isPanelsMode -> Color(0xFFFACC15)
+                                isSelected -> EInkPureBlack
+                                else -> EInkBorderGray
+                            },
+                            topLeft = tl,
+                            size = panelSize,
+                            style = Stroke(width = if (isSelected) 3f else 1.2f)
+                        )
+                    }
                 }
             }
         }
 
-        if (!state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1) {
+        // Only show quadrant pill badges when the overlay is active (so full-screen book stays 100% clean)
+        if (showOverlayBadges && !state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1) {
             blocks.forEach { block ->
                 val isCurrent = block.stepIndex == state.activeStepIndex
                 val badgeX = with(density) { (block.baseRect.left * canvasWidthPx + 12f).toDp() }
