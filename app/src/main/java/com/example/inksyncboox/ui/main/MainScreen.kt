@@ -155,11 +155,11 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                 }
                 DocKind.CBZ -> {
                     val pages = engine.openComic(uri)
-                    viewModel.onFixedDocumentOpened(uri.toString(), name, DocKind.CBZ, pages)
+                    viewModel.onFixedDocumentOpened(uri.toString(), name, DocKind.CBZ, pages, engine.pageAspects)
                 }
                 DocKind.PDF -> {
                     val pages = engine.openPdf(uri)
-                    viewModel.onFixedDocumentOpened(uri.toString(), name, DocKind.PDF, pages)
+                    viewModel.onFixedDocumentOpened(uri.toString(), name, DocKind.PDF, pages, engine.pageAspects)
                 }
             }
         } catch (_: SecurityException) {
@@ -296,6 +296,8 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                                 state = state,
                                 showTierBadges = showOverlay || state.isStudioGridEditMode,
                                 renderRegion = engine::renderRegion,
+                                contentBounds = engine::contentBounds,
+                                preload = engine::preload,
                                 onStepPrev = { closeOverlay(); viewModel.stepBackwardTierOrPage() },
                                 onStepNext = { closeOverlay(); viewModel.stepForwardTierOrPage() },
                                 onToggleOverlay = { if (showOverlay) closeOverlay() else showOverlay = true },
@@ -363,10 +365,15 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
 // Fixed-page viewport (PDF and CBZ)
 // =============================================================================================
 
+/** A rendered view, with the page region it shows and the page's crop (both page coordinates). */
 private data class RenderedRegion(
     val key: String,
-    val bitmap: Bitmap
+    val bitmap: Bitmap,
+    val region: NormalizedRect,
+    val crop: NormalizedRect
 )
+
+private val FULL_PAGE = NormalizedRect(0f, 0f, 1f, 1f)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -374,6 +381,8 @@ private fun FixedPageViewport(
     state: BooxReaderState,
     showTierBadges: Boolean,
     renderRegion: suspend (Int, NormalizedRect, Int, Int) -> Bitmap?,
+    contentBounds: suspend (Int) -> NormalizedRect,
+    preload: suspend (List<Pair<Int, NormalizedRect>>, Int, Int) -> Unit,
     onStepPrev: () -> Unit,
     onStepNext: () -> Unit,
     onToggleOverlay: () -> Unit,
@@ -395,12 +404,7 @@ private fun FixedPageViewport(
 
     val settings = state.settings
     val blocks = state.computedBlocks
-    val zoomed = state.isZoomedToTier && state.gridPreset != BooxGridPreset.GRID_1X1
-    val viewportRect = when {
-        zoomed -> state.currentBlock.redundantRect
-        settings.trimMargins -> NormalizedRect(0.055f, 0.055f, 0.945f, 0.945f)
-        else -> NormalizedRect(0f, 0f, 1f, 1f)
-    }
+    val zoomed = state.isZoomedOn(state.pageIndex)
     val isComic = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS
     val background = if (isComic && settings.darkGutter) EInkPureBlack else EInkPaperWhite
 
@@ -418,16 +422,35 @@ private fun FixedPageViewport(
         val canvasH = constraints.maxHeight.coerceAtLeast(1)
         val density = LocalDensity.current
         val docKey = state.document?.key.orEmpty()
-        val renderKey = "$docKey:${state.pageIndex}:$viewportRect:${canvasW}x$canvasH"
+        // Everything that changes which part of the page is shown.
+        val renderKey = listOf(
+            docKey, state.pageIndex, state.activeStepIndex, zoomed, state.workspaceMode,
+            state.gridPreset, state.traversalFlow, state.colSplitRatios, state.rowSplitRatios,
+            state.customOverrides, settings.autoCrop, settings.splitSpreads, settings.rightToLeft,
+            canvasW, canvasH
+        ).joinToString("|")
 
         LaunchedEffect(renderKey) {
-            val bmp = renderRegion(state.pageIndex, viewportRect, canvasW, canvasH)
-            rendered = bmp?.let { RenderedRegion(renderKey, it) }
+            // Crop (if on) first, then the tier / spread half within the cropped content.
+            suspend fun cropFor(page: Int) = if (settings.autoCrop) contentBounds(page) else FULL_PAGE
+            suspend fun regionFor(page: Int, step: Int) = state.contentRegionFor(page, step).mapInto(cropFor(page))
+
+            val crop = cropFor(state.pageIndex)
+            val region = state.contentRegionFor(state.pageIndex, state.activeStepIndex).mapInto(crop)
+            val bmp = renderRegion(state.pageIndex, region, canvasW, canvasH)
+            rendered = bmp?.let { RenderedRegion(renderKey, it, region, crop) }
+
+            // Prepare the next two views in the background so the next turn is instant.
+            val upcoming = state.upcomingViews(2).map { (page, step) -> page to regionFor(page, step) }
+            preload(upcoming, canvasW, canvasH)
         }
 
         // Only draw a bitmap rendered for exactly this page/region, so a stale image is never
         // stretched into the new viewport (which would cost an extra e-ink refresh).
-        val bitmap = rendered?.takeIf { it.key == renderKey }?.bitmap
+        val current = rendered?.takeIf { it.key == renderKey }
+        val bitmap = current?.bitmap
+        val viewportRect = current?.region ?: FULL_PAGE
+        val cropRect = current?.crop ?: FULL_PAGE
 
         // Aspect-fit the region into the screen; never stretch.
         val regionAspect = bitmap?.let { it.width.toFloat() / it.height } ?: (canvasW.toFloat() / canvasH)
@@ -496,13 +519,11 @@ private fun FixedPageViewport(
             }
         }
 
-        fun dispatchTap(x: Float) {
-            val ratio = x / canvasW
-            val (backZone, forwardZone) = if (settings.rightToLeft) (ratio > 0.75f) to (ratio < 0.25f) else (ratio < 0.25f) to (ratio > 0.75f)
-            when {
-                backZone -> onStepPrev()
-                forwardZone -> onStepNext()
-                else -> onToggleOverlay()
+        fun dispatchTap(x: Float, y: Float) {
+            when (TapZones.resolve(settings.tapLayout, x, y, canvasW.toFloat(), canvasH.toFloat(), settings.rightToLeft)) {
+                TapAction.PREVIOUS -> onStepPrev()
+                TapAction.NEXT -> onStepNext()
+                TapAction.MENU -> onToggleOverlay()
             }
         }
 
@@ -555,7 +576,7 @@ private fun FixedPageViewport(
                                     (xs.max() - xs.min() < 0.01f && ys.max() - ys.min() < 0.01f)
                                 if (isTap && state.activeStylusTool == BooxStylusTool.NAVIGATE) {
                                     // A pen tap in reading mode turns the page instead of leaving a dot.
-                                    if (event.actionMasked == MotionEvent.ACTION_UP) dispatchTap(event.x)
+                                    if (event.actionMasked == MotionEvent.ACTION_UP) dispatchTap(event.x, event.y)
                                 } else if (!isTap) {
                                     onCommitStroke(committed)
                                 }
@@ -599,7 +620,7 @@ private fun FixedPageViewport(
 
                         BooxStylusTool.NAVIGATE -> {
                             if (event.actionMasked == MotionEvent.ACTION_UP && !state.isStudioGridEditMode) {
-                                dispatchTap(event.x)
+                                dispatchTap(event.x, event.y)
                             }
                             true
                         }
@@ -607,25 +628,14 @@ private fun FixedPageViewport(
                 }
         ) {
             if (bitmap != null) {
-                val contrast = if (settings.contrastBoost) {
-                    ColorFilter.colorMatrix(
-                        ColorMatrix(
-                            floatArrayOf(
-                                1.12f, 0f, 0f, 0f, -6f,
-                                0f, 1.12f, 0f, 0f, -6f,
-                                0f, 0f, 1.12f, 0f, -6f,
-                                0f, 0f, 0f, 1f, 0f
-                            )
-                        )
-                    )
-                } else null
+                val colorFilter = pageColorFilter(settings.contrastBoost, settings.grayscale)
                 drawImage(
                     image = bitmap.asImageBitmap(),
                     srcOffset = IntOffset.Zero,
                     srcSize = IntSize(bitmap.width, bitmap.height),
                     dstOffset = IntOffset(dstLeft.roundToInt(), dstTop.roundToInt()),
                     dstSize = IntSize(dstW.roundToInt(), dstH.roundToInt()),
-                    colorFilter = contrast
+                    colorFilter = colorFilter
                 )
 
                 state.currentPageQuadHighlights.forEach { quad ->
@@ -689,8 +699,9 @@ private fun FixedPageViewport(
 
                 if (!zoomed && state.gridPreset != BooxGridPreset.GRID_1X1) {
                     blocks.forEach { block ->
-                        val tl = pageToScreen(block.baseRect.left, block.baseRect.top)
-                        val br = pageToScreen(block.baseRect.right, block.baseRect.bottom)
+                        val blockRect = block.baseRect.mapInto(cropRect)
+                        val tl = pageToScreen(blockRect.left, blockRect.top)
+                        val br = pageToScreen(blockRect.right, blockRect.bottom)
                         val isSelected = block.stepIndex == state.activeStepIndex
                         val size = Size(br.x - tl.x, br.y - tl.y)
                         if (isComic && settings.panelSpotlight && !isSelected) {
@@ -713,7 +724,8 @@ private fun FixedPageViewport(
         if (showTierBadges && !zoomed && state.gridPreset != BooxGridPreset.GRID_1X1) {
             blocks.forEach { block ->
                 val isCurrent = block.stepIndex == state.activeStepIndex
-                val tl = pageToScreen(block.baseRect.left, block.baseRect.top)
+                val blockRect = block.baseRect.mapInto(cropRect)
+                val tl = pageToScreen(blockRect.left, blockRect.top)
                 Surface(
                     modifier = Modifier
                         .offset(x = with(density) { (tl.x + 12f).toDp() }, y = with(density) { (tl.y + 12f).toDp() })
@@ -1037,13 +1049,15 @@ private fun DisplayPanel(state: BooxReaderState, viewModel: MainScreenViewModel,
         } else {
             PillRow {
                 EInkActionPill("Contrast boost", s.contrastBoost, viewModel::toggleContrastBoost)
-                EInkActionPill("Trim margins", s.trimMargins, viewModel::toggleTrimMargins)
+                EInkActionPill("Auto-crop margins", s.autoCrop, viewModel::toggleAutoCrop)
+                EInkActionPill("Grayscale", s.grayscale, viewModel::toggleGrayscale)
                 EInkActionPill(
                     if (s.rightToLeft) "Right to left (manga)" else "Left to right",
                     s.rightToLeft,
                     viewModel::toggleRightToLeft
                 )
                 if (state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS) {
+                    EInkActionPill("Split two-page spreads", s.splitSpreads, viewModel::toggleSplitSpreads)
                     EInkActionPill("Black background", s.darkGutter, viewModel::toggleDarkGutter)
                 }
             }
@@ -1058,6 +1072,17 @@ private fun DisplayPanel(state: BooxReaderState, viewModel: MainScreenViewModel,
                     })
                 }
             }
+        }
+        TapLayoutRow(state, viewModel)
+    }
+}
+
+@Composable
+private fun TapLayoutRow(state: BooxReaderState, viewModel: MainScreenViewModel) {
+    PillRow {
+        PanelLabel("Tap to turn")
+        TapLayout.entries.forEach { layout ->
+            EInkActionPill(layout.label, state.settings.tapLayout == layout, { viewModel.setTapLayout(layout) })
         }
     }
 }
@@ -1115,4 +1140,33 @@ private fun ScreenPanel(state: BooxReaderState, viewModel: MainScreenViewModel) 
             fontSize = 13.sp
         )
     }
+}
+
+/**
+ * Optional contrast boost and grayscale for page images. Grayscale lets the Note Air 4C show
+ * black-and-white pages at the panel's full 300 PPI instead of through the 150 PPI color layer.
+ */
+private fun pageColorFilter(contrastBoost: Boolean, grayscale: Boolean): ColorFilter? {
+    if (!contrastBoost && !grayscale) return null
+    val gain = if (contrastBoost) 1.12f else 1f
+    val offset = if (contrastBoost) -6f else 0f
+    val m = if (grayscale) {
+        val r = 0.299f * gain
+        val g = 0.587f * gain
+        val b = 0.114f * gain
+        floatArrayOf(
+            r, g, b, 0f, offset,
+            r, g, b, 0f, offset,
+            r, g, b, 0f, offset,
+            0f, 0f, 0f, 1f, 0f
+        )
+    } else {
+        floatArrayOf(
+            gain, 0f, 0f, 0f, offset,
+            0f, gain, 0f, 0f, offset,
+            0f, 0f, gain, 0f, offset,
+            0f, 0f, 0f, 1f, 0f
+        )
+    }
+    return ColorFilter.colorMatrix(ColorMatrix(m))
 }

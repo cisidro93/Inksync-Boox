@@ -138,4 +138,40 @@ class MainScreenViewModelTest {
         assertTrue(vm.readerState.value.epubHighlightedCfis.isEmpty())
         assertTrue(vm.readerState.value.studyCards.isEmpty())
     }
+
+    @Test
+    fun `wide comic pages are shown as two halves, right first in manga mode`() = runTest(dispatcher) {
+        val vm = viewModel()
+        // Page 1 is a two-page spread.
+        vm.onFixedDocumentOpened("content://comic", "Comic.cbz", DocKind.CBZ, 3, listOf(0.7f, 1.4f, 0.7f))
+        vm.stepForwardTierOrPage()
+        var s = vm.readerState.value
+        assertEquals(1, s.pageIndex)
+        assertTrue(s.isZoomedOn(1))
+        assertEquals(0.5f, s.contentRegionFor(1, 0).right, 0.001f) // left half first
+
+        vm.stepForwardTierOrPage()
+        s = vm.readerState.value
+        assertEquals(1, s.pageIndex)
+        assertEquals(1, s.activeStepIndex)
+
+        vm.stepForwardTierOrPage()
+        assertEquals(2, vm.readerState.value.pageIndex)
+
+        // Going back lands on the spread's last half.
+        vm.stepBackwardTierOrPage()
+        assertEquals(1, vm.readerState.value.pageIndex)
+        assertEquals(1, vm.readerState.value.activeStepIndex)
+
+        vm.toggleRightToLeft()
+        s = vm.readerState.value
+        assertEquals(0.5f, s.contentRegionFor(1, 0).left, 0.001f) // manga: right half first
+    }
+
+    @Test
+    fun `upcoming views follow spread halves then later pages`() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.onFixedDocumentOpened("content://comic", "Comic.cbz", DocKind.CBZ, 3, listOf(1.4f, 0.7f, 0.7f))
+        assertEquals(listOf(0 to 1, 1 to 0), vm.readerState.value.upcomingViews(2))
+    }
 }

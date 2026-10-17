@@ -267,14 +267,19 @@ fun EpubReaderView(
 
     BoxWithConstraints(modifier = modifier.fillMaxSize().background(EInkPaperWhite)) {
         val screenWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val screenHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val lastTapX = remember { mutableFloatStateOf(screenWidthPx / 2f) }
+        val lastTapY = remember { mutableFloatStateOf(screenHeightPx / 2f) }
 
         fun dispatchTap() {
-            val ratio = (lastTapX.floatValue / screenWidthPx).coerceIn(0f, 1f)
-            when {
-                ratio < 0.25f -> onStepPrev()
-                ratio > 0.75f -> onStepNext()
-                else -> onToggleOverlay()
+            val action = TapZones.resolve(
+                state.settings.tapLayout, lastTapX.floatValue, lastTapY.floatValue,
+                screenWidthPx, screenHeightPx, rightToLeft = false
+            )
+            when (action) {
+                TapAction.PREVIOUS -> onStepPrev()
+                TapAction.NEXT -> onStepNext()
+                TapAction.MENU -> onToggleOverlay()
             }
         }
 
@@ -282,7 +287,10 @@ fun EpubReaderView(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInteropFilter { event ->
-                    if (event.actionMasked == MotionEvent.ACTION_DOWN) lastTapX.floatValue = event.x
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        lastTapX.floatValue = event.x
+                        lastTapY.floatValue = event.y
+                    }
                     false
                 }
                 .clickable(

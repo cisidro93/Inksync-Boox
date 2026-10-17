@@ -48,6 +48,16 @@ class BooxPdfEngine(private val context: Context) {
     var pageCount: Int = 0
         private set
 
+    /** Width / height of every page, filled in when a document opens. */
+    var pageAspects: List<Float> = emptyList()
+        private set
+
+    // Recently rendered regions (including preloaded ones), most recent last.
+    private val renderCache = object : LinkedHashMap<String, Bitmap>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?) = size > RENDER_CACHE_SIZE
+    }
+    private val contentBoundsCache = mutableMapOf<Int, NormalizedRect>()
+
     fun resolveDisplayName(uri: Uri): String {
         try {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -72,6 +82,9 @@ class BooxPdfEngine(private val context: Context) {
             pdfRenderer = renderer
             sourceKind = SourceKind.PDF
             pageCount = renderer.pageCount
+            pageAspects = (0 until pageCount).map { i ->
+                renderer.openPage(i).use { it.width.toFloat() / it.height.coerceAtLeast(1) }
+            }
             pageCount
         }
     }
@@ -110,6 +123,9 @@ class BooxPdfEngine(private val context: Context) {
                 cbzEntries = images
                 sourceKind = SourceKind.CBZ
                 pageCount = images.size
+                pageAspects = images.map { name ->
+                    zip.getEntry(name)?.let { entry -> zip.getInputStream(entry).use { aspectOf(it) } } ?: 0.7f
+                }
             } else {
                 val extracted = try {
                     ComicArchiveExtractor.extractImages(
@@ -128,6 +144,7 @@ class BooxPdfEngine(private val context: Context) {
                     .map { extracted.getValue(it) }
                 sourceKind = SourceKind.EXTRACTED
                 pageCount = extractedPages.size
+                pageAspects = extractedPages.map { file -> file.inputStream().buffered().use { aspectOf(it) } }
             }
             pageCount
         }
@@ -143,13 +160,57 @@ class BooxPdfEngine(private val context: Context) {
         targetWidthPx: Int,
         targetHeightPx: Int
     ): Bitmap? = withContext(Dispatchers.IO) {
-        renderMutex.withLock {
-            when (sourceKind) {
-                SourceKind.NONE -> null
-                SourceKind.PDF -> renderPdfRegion(pageIndex, region, targetWidthPx, targetHeightPx)
-                SourceKind.CBZ, SourceKind.EXTRACTED -> renderCbzRegion(pageIndex, region, targetWidthPx, targetHeightPx)
-            }
+        renderMutex.withLock { renderLocked(pageIndex, region, targetWidthPx, targetHeightPx) }
+    }
+
+    private fun renderLocked(pageIndex: Int, region: NormalizedRect, maxW: Int, maxH: Int): Bitmap? {
+        val key = "$pageIndex:${region.left},${region.top},${region.right},${region.bottom}:${maxW}x$maxH"
+        renderCache[key]?.let { return it }
+        val bitmap = when (sourceKind) {
+            SourceKind.NONE -> null
+            SourceKind.PDF -> renderPdfRegion(pageIndex, region, maxW, maxH)
+            SourceKind.CBZ, SourceKind.EXTRACTED -> renderCbzRegion(pageIndex, region, maxW, maxH)
         }
+        if (bitmap != null) renderCache[key] = bitmap
+        return bitmap
+    }
+
+    /**
+     * Renders upcoming views in the background so the next page turn is instant.
+     * Each request is (page, region); stops early if the caller is cancelled.
+     */
+    suspend fun preload(requests: List<Pair<Int, NormalizedRect>>, targetWidthPx: Int, targetHeightPx: Int) {
+        for ((page, region) in requests) {
+            renderRegion(page, region, targetWidthPx, targetHeightPx)
+        }
+    }
+
+    /**
+     * The drawn area of [pageIndex] with blank margins removed (see [ContentBounds]).
+     * Detected on a small render of the page and cached.
+     */
+    suspend fun contentBounds(pageIndex: Int): NormalizedRect = withContext(Dispatchers.IO) {
+        renderMutex.withLock {
+            contentBoundsCache[pageIndex]?.let { return@withLock it }
+            val full = NormalizedRect(0f, 0f, 1f, 1f)
+            val small = when (sourceKind) {
+                SourceKind.NONE -> null
+                SourceKind.PDF -> renderPdfRegion(pageIndex, full, CROP_PROBE_WIDTH, CROP_PROBE_WIDTH * 3)
+                SourceKind.CBZ, SourceKind.EXTRACTED -> renderCbzRegion(pageIndex, full, CROP_PROBE_WIDTH, CROP_PROBE_WIDTH * 3)
+            } ?: return@withLock full
+            val pixels = IntArray(small.width * small.height)
+            small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
+            val bounds = ContentBounds.find(pixels, small.width, small.height)
+            small.recycle()
+            contentBoundsCache[pageIndex] = bounds
+            bounds
+        }
+    }
+
+    private fun aspectOf(stream: java.io.InputStream): Float {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeStream(stream, null, opts)
+        return if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth.toFloat() / opts.outHeight else 0.7f
     }
 
     private fun fitSize(regionW: Float, regionH: Float, maxW: Int, maxH: Int): Pair<Int, Int> {
@@ -252,6 +313,9 @@ class BooxPdfEngine(private val context: Context) {
         cbzZip = null
         cbzEntries = emptyList()
         extractedPages = emptyList()
+        pageAspects = emptyList()
+        renderCache.clear()
+        contentBoundsCache.clear()
         sourceKind = SourceKind.NONE
         pageCount = 0
     }
@@ -259,6 +323,12 @@ class BooxPdfEngine(private val context: Context) {
     companion object {
         private val IMAGE_EXTENSIONS = listOf(".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
         private const val MAX_BITMAP_PIXELS = 1860L * 2480L * 3 / 2
+
+        /** Rendered regions kept in memory (current, previous and preloaded views). */
+        private const val RENDER_CACHE_SIZE = 4
+
+        /** Width of the small render used to detect page margins. */
+        private const val CROP_PROBE_WIDTH = 360
 
         /** Natural ordering so "page2" sorts before "page10". */
         fun compareNaturalOrder(a: String, b: String): Int {

@@ -7,6 +7,7 @@ import com.example.inksyncboox.ink.NormalizedInkPoint
 import com.example.inksyncboox.ink.QuadTextHighlight
 import com.example.inksyncboox.neoflow.NormalizedRect
 import com.example.inksyncboox.study.UnifiedStudyCard
+import com.example.inksyncboox.ui.main.TapLayout
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -44,7 +45,13 @@ data class ReaderSettings(
     /** Full GC16 flash every N page turns; 0 disables it. */
     val fullRefreshEveryNTurns: Int = 5,
     val contrastBoost: Boolean = true,
-    val trimMargins: Boolean = false,
+    /** Crop blank page margins automatically (detected per page). */
+    val autoCrop: Boolean = false,
+    /** Show wide two-page spreads in comics as two screens. */
+    val splitSpreads: Boolean = true,
+    /** Render PDFs and comics in grayscale (full 300 PPI on Kaleido 3, no color-filter grain). */
+    val grayscale: Boolean = false,
+    val tapLayout: TapLayout = TapLayout.EDGES,
     /** Right-to-left page turning for manga. */
     val rightToLeft: Boolean = false,
     val panelSpotlight: Boolean = false,
@@ -123,7 +130,10 @@ class FileReaderStore(context: Context) : ReaderStore {
             epubTwoColumn = o.optBoolean("epubTwoColumn", d.epubTwoColumn),
             fullRefreshEveryNTurns = o.optInt("fullRefreshEveryNTurns", d.fullRefreshEveryNTurns),
             contrastBoost = o.optBoolean("contrastBoost", d.contrastBoost),
-            trimMargins = o.optBoolean("trimMargins", d.trimMargins),
+            autoCrop = o.optBoolean("autoCrop", d.autoCrop),
+            splitSpreads = o.optBoolean("splitSpreads", d.splitSpreads),
+            grayscale = o.optBoolean("grayscale", d.grayscale),
+            tapLayout = TapLayout.entries.firstOrNull { it.name == o.optString("tapLayout") } ?: d.tapLayout,
             rightToLeft = o.optBoolean("rightToLeft", d.rightToLeft),
             panelSpotlight = o.optBoolean("panelSpotlight", d.panelSpotlight),
             darkGutter = o.optBoolean("darkGutter", d.darkGutter)
@@ -137,7 +147,10 @@ class FileReaderStore(context: Context) : ReaderStore {
             .put("epubTwoColumn", settings.epubTwoColumn)
             .put("fullRefreshEveryNTurns", settings.fullRefreshEveryNTurns)
             .put("contrastBoost", settings.contrastBoost)
-            .put("trimMargins", settings.trimMargins)
+            .put("autoCrop", settings.autoCrop)
+            .put("splitSpreads", settings.splitSpreads)
+            .put("grayscale", settings.grayscale)
+            .put("tapLayout", settings.tapLayout.name)
             .put("rightToLeft", settings.rightToLeft)
             .put("panelSpotlight", settings.panelSpotlight)
             .put("darkGutter", settings.darkGutter)

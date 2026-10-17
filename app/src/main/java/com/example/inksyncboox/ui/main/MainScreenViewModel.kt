@@ -48,6 +48,9 @@ data class OpenDocument(
     val key: String get() = documentKey(uri)
 }
 
+/** Pages wider than this (width / height) are treated as two-page spreads. */
+private const val SPREAD_ASPECT = 1.05f
+
 data class BooxReaderState(
     val workspaceMode: BooxWorkspaceMode = BooxWorkspaceMode.LIBRARY,
     val document: OpenDocument? = null,
@@ -68,6 +71,8 @@ data class BooxReaderState(
     val rowSplitRatios: List<Float> = emptyList(),
     val overlapRatio: Float = 0.08f,
     val customOverrides: Map<Int, NormalizedRect> = emptyMap(),
+    /** Width / height of every page, known when the document opens (used to detect spreads). */
+    val pageAspects: List<Float> = emptyList(),
 
     // EPUB
     val activeEpubBook: EpubBookDocument? = null,
@@ -94,15 +99,68 @@ data class BooxReaderState(
     val regalFlashTick: Int = 0,
     val turnsSinceLastRegal: Int = 0
 ) {
+    /** A wide two-page spread that is shown as two screens (comics only, whole-page mode). */
+    fun isSplitSpread(page: Int): Boolean =
+        settings.splitSpreads &&
+            workspaceMode == BooxWorkspaceMode.PANELS_COMICS &&
+            gridPreset == BooxGridPreset.GRID_1X1 &&
+            (pageAspects.getOrNull(page) ?: 0f) > SPREAD_ASPECT
+
+    /** Reading steps for [page], in content (cropped) coordinates. */
+    fun blocksFor(page: Int): List<BooxSectionBlock> =
+        if (isSplitSpread(page)) {
+            // Left and right halves; manga reads the right half first.
+            NeoFlowEngine.computeBlocks(
+                preset = BooxGridPreset.GRID_2X1,
+                flow = if (settings.rightToLeft) BooxTraversalFlow.REVERSE_Z else BooxTraversalFlow.Z_FLOW,
+                colSplitRatios = listOf(0.5f),
+                rowSplitRatios = emptyList(),
+                overlapRatio = 0f,
+                marginInset = 0f
+            )
+        } else {
+            NeoFlowEngine.computeBlocks(
+                preset = gridPreset,
+                flow = traversalFlow,
+                colSplitRatios = colSplitRatios,
+                rowSplitRatios = rowSplitRatios,
+                overlapRatio = overlapRatio,
+                customOverrides = customOverrides
+            )
+        }
+
+    /** Whether [page] is shown one block at a time (a zoomed tier or half of a spread). */
+    fun isZoomedOn(page: Int): Boolean =
+        isSplitSpread(page) || (isZoomedToTier && gridPreset != BooxGridPreset.GRID_1X1)
+
+    /** Part of the content area shown for ([page], [step]), before cropping is applied. */
+    fun contentRegionFor(page: Int, step: Int): NormalizedRect {
+        if (!isZoomedOn(page)) return NormalizedRect(0f, 0f, 1f, 1f)
+        val blocks = blocksFor(page)
+        return blocks[step.coerceIn(0, blocks.lastIndex)].redundantRect
+    }
+
+    /** The next [count] (page, step) views after the current one, for preloading. */
+    fun upcomingViews(count: Int): List<Pair<Int, Int>> {
+        val out = mutableListOf<Pair<Int, Int>>()
+        var page = pageIndex
+        var step = activeStepIndex
+        while (out.size < count) {
+            if (step + 1 < blocksFor(page).size) {
+                step++
+            } else if (page + 1 < pageCount) {
+                page++
+                step = 0
+            } else {
+                break
+            }
+            out += page to step
+        }
+        return out
+    }
+
     val computedBlocks: List<BooxSectionBlock>
-        get() = NeoFlowEngine.computeBlocks(
-            preset = gridPreset,
-            flow = traversalFlow,
-            colSplitRatios = colSplitRatios,
-            rowSplitRatios = rowSplitRatios,
-            overlapRatio = overlapRatio,
-            customOverrides = customOverrides
-        )
+        get() = blocksFor(pageIndex)
 
     val currentBlock: BooxSectionBlock
         get() {
@@ -205,7 +263,13 @@ class MainScreenViewModel(
         _readerState.update { it.copy(errorMessage = null) }
     }
 
-    fun onFixedDocumentOpened(uri: String, title: String, kind: DocKind, pageCount: Int) {
+    fun onFixedDocumentOpened(
+        uri: String,
+        title: String,
+        kind: DocKind,
+        pageCount: Int,
+        pageAspects: List<Float> = emptyList()
+    ) {
         val doc = OpenDocument(uri, title, kind)
         val saved = recentFor(uri)
         val annotations = store.loadAnnotations(doc.key)
@@ -216,6 +280,7 @@ class MainScreenViewModel(
                 errorMessage = null,
                 workspaceMode = if (kind == DocKind.CBZ) BooxWorkspaceMode.PANELS_COMICS else BooxWorkspaceMode.PDF_NEOFLOW,
                 pageCount = pageCount.coerceAtLeast(1),
+                pageAspects = pageAspects,
                 pageIndex = (saved?.pageIndex ?: 0).coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
                 activeStepIndex = 0,
                 activeEpubBook = null,
@@ -240,6 +305,7 @@ class MainScreenViewModel(
                 errorMessage = null,
                 workspaceMode = BooxWorkspaceMode.KINDLE_EPUB,
                 activeEpubBook = book,
+                pageAspects = emptyList(),
                 epubChapterIndex = chapter,
                 epubAnchor = if (saved != null) EpubAnchor(saved.epubParagraph, saved.epubOffset) else EpubAnchor.START,
                 epubPageStarts = emptyList(),
@@ -395,7 +461,7 @@ class MainScreenViewModel(
                     state.copy(activeStepIndex = state.activeStepIndex - 1).afterPageTurn()
                 state.pageIndex > 0 -> state.copy(
                     pageIndex = state.pageIndex - 1,
-                    activeStepIndex = (state.computedBlocks.size - 1).coerceAtLeast(0)
+                    activeStepIndex = (state.blocksFor(state.pageIndex - 1).size - 1).coerceAtLeast(0)
                 ).afterPageTurn()
                 else -> state
             }
@@ -576,7 +642,16 @@ class MainScreenViewModel(
 
     fun toggleContrastBoost() = updateSettings { it.copy(contrastBoost = !it.contrastBoost) }
 
-    fun toggleTrimMargins() = updateSettings { it.copy(trimMargins = !it.trimMargins) }
+    fun toggleAutoCrop() = updateSettings { it.copy(autoCrop = !it.autoCrop) }
+
+    fun toggleSplitSpreads() {
+        updateSettings { it.copy(splitSpreads = !it.splitSpreads) }
+        _readerState.update { it.copy(activeStepIndex = 0) }
+    }
+
+    fun toggleGrayscale() = updateSettings { it.copy(grayscale = !it.grayscale) }
+
+    fun setTapLayout(layout: TapLayout) = updateSettings { it.copy(tapLayout = layout) }
 
     fun togglePanelSpotlight() = updateSettings { it.copy(panelSpotlight = !it.panelSpotlight) }
 
