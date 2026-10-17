@@ -1,15 +1,15 @@
 # InkSync Boox
 
-A reader for the **Onyx Boox Note Air 4C** (10.3", Kaleido 3 color e-ink, Android 13): EPUB books, PDFs, and CBZ comics/manga in one app, laid out for e-ink.
+A reader for the **Onyx Boox Note Air 4C** (10.3", Kaleido 3 color e-ink, Android 13): EPUB books, PDFs, and comics/manga (CBZ, CBR, CB7) in one app, laid out for e-ink.
 
 ## What it does
 
 - **Library** of recently opened documents. Each one reopens on the page you left, and the last document reopens when you launch the app.
-- **EPUB reader** with real pagination: one screen per page, four text sizes, one or two columns, bold/italic kept, chapter list. Long-press a paragraph to highlight it.
-- **PDF and CBZ viewer** that renders each page (or zoomed region) at screen resolution, so text stays sharp on the 300 PPI panel.
-- **Comics and manga**: right-to-left page turning for manga, optional black background, natural page ordering inside CBZ archives.
+- **EPUB reader** with real pagination: one screen per page, four text sizes, one or two columns, bold/italic kept, images (covers and illustrations, scaled to fit), chapter list. Long-press a paragraph to highlight it.
+- **PDF and comic viewer** that renders each page (or zoomed region) at screen resolution, so text stays sharp on the 300 PPI panel.
+- **Comics and manga**: CBZ, CBR (RAR4 and RAR5) and CB7 archives; right-to-left page turning for manga; optional black background; natural page ordering.
 - **Tiers ("NeoFlow")**: split a page into a grid (2×1, 2×2, 3×3, …) and step through it with page turns. Useful for two-column papers and comic panels on a portrait screen.
-- **Pen**: write, highlight, mark an area, or erase on PDF and comic pages, with palm rejection. A side notes pane (Cornell, ruled, or dot grid) sits next to any document. A quick pen tap in reading mode turns the page instead of leaving a dot.
+- **Pen**: write, highlight, mark an area, or erase on PDF and comic pages, with palm rejection. On Boox, the Pen and Marker tools use Onyx's low-latency pen layer, and the pen's eraser end erases. A side notes pane (Cornell, ruled, or dot grid) sits next to any document. A quick pen tap in reading mode turns the page instead of leaving a dot.
 - **Highlights** per document, with jump-to-source and Markdown export to any folder you choose.
 - **E-ink care**: no animations, ripples, or overscroll; a full-screen refresh every N page turns (1, 3, 5, 10, or never) plus a manual "Refresh now".
 
@@ -31,12 +31,19 @@ Full-screen refresh uses Onyx's framework method `View.refreshScreen(x, y, w, h,
 
 Everyday partial refresh is left to the system, so the speed you pick for this app in Boox **E-Ink Center** (HD, Balanced, Fast, Ultrafast) still applies. The library screen shows whether the refresh API was found on your device.
 
+## Pen layer on Boox
+
+With the Pen or Marker tool selected, ink is drawn by Onyx's firmware through `TouchHelper` from `onyxsdk-pen` (the same low-latency path the Boox Notes app uses). The sequence follows Onyx's Pen SDK docs and the Notable app, which models NeoReader (`com.onyx.kreader`): the firmware draws the stroke live; on pen-up the app saves and draws it; then the app briefly releases the screen (500 ms on color panels) so the panel shows the app's version. Raw drawing is switched off while the menu is open, while adjusting tiers, and during page turns, because it holds the screen still while active.
+
+## Comics in RAR and 7-Zip
+
+`.cbr` and `.cb7` files are read with [libarchive-android](https://github.com/zhanghai/libarchive-android) (as Mihon does), which handles RAR5. These formats are often "solid", so the pages are unpacked once into the app cache when the comic opens; large archives take a few seconds. Files named `.cbr` that are really zips are detected and read directly.
+
 ## Limitations
 
-- EPUB: images, tables and publisher CSS aren't shown; DRM-protected books can't be opened.
-- No CBR (RAR) comics.
-- Pen ink is drawn by the app, not Onyx's low-latency pen layer, so it lags more than the Boox Notes app.
-- The refresh and pen code paths need testing on a real Note Air 4C; they can't be exercised in the emulator.
+- EPUB: tables, SVG drawings and publisher CSS aren't rendered; DRM-protected books can't be opened.
+- Password-protected RAR/7z comics aren't supported.
+- The pen layer, refresh and comic unpacking need testing on a real Note Air 4C; none of it can be exercised in the emulator.
 
 ## Building
 
