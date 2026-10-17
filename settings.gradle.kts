@@ -19,8 +19,6 @@ dependencyResolutionManagement {
                 includeGroupByRegex("androidx.*")
                 includeGroupByRegex("com\\.android.*")
                 includeGroupByRegex("com\\.google.*")
-                // easypermissions, needed by the Onyx SDK
-                includeGroupByRegex("pub\\.devrel.*")
             }
         }
         mavenCentral()
@@ -28,7 +26,11 @@ dependencyResolutionManagement {
         maven {
             url = uri("http://repo.boox.com/repository/maven-public/")
             isAllowInsecureProtocol = true
-            content { includeGroupByRegex("com\\.onyx.*") }
+            content {
+                includeGroupByRegex("com\\.onyx.*")
+                // Onyx also mirrors a few old dependencies of its SDK (e.g. easypermissions)
+                includeGroupByRegex("pub\\.devrel.*")
+            }
         }
         // Transitive dependencies of the Onyx SDK
         maven { url = uri("https://jitpack.io") }
