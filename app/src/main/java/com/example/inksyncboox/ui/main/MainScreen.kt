@@ -49,7 +49,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -68,7 +70,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -81,6 +86,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.inksyncboox.data.DocKind
 import com.example.inksyncboox.eink.BooxEpdController
+import com.example.inksyncboox.eink.OnyxPenController
 import com.example.inksyncboox.epub.EInkTypographyPreset
 import com.example.inksyncboox.epub.RealEpubParser
 import com.example.inksyncboox.ink.BooxStylusTool
@@ -100,6 +106,7 @@ import com.example.inksyncboox.theme.EInkSurfaceGray
 import com.example.inksyncboox.theme.InkSyncBooxTheme
 import com.example.inksyncboox.theme.KaleidoAmberHighlight
 import com.example.inksyncboox.theme.KaleidoCobaltInk
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
@@ -126,6 +133,12 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
 
     val engine = remember(context) { BooxPdfEngine(context.applicationContext) }
     DisposableEffect(engine) { onDispose { engine.close() } }
+
+    // Onyx's low-latency pen layer; inactive (and never created) on non-Boox devices.
+    val penController = remember(hostView) {
+        if (BooxEpdController.isBooxHardware) OnyxPenController(hostView) else null
+    }
+    DisposableEffect(penController) { onDispose { penController?.close() } }
 
     // Opening documents ------------------------------------------------------------------------
     LaunchedEffect(pendingUri) {
@@ -291,7 +304,9 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                                 onUpdateRowSplit = viewModel::updateRowSplitRatio,
                                 onCommitStroke = viewModel::commitInkStroke,
                                 onCommitQuadHighlight = viewModel::commitQuadHighlight,
-                                onErasePoint = { x, y -> viewModel.eraseAtNormalizedPoint(x, y) }
+                                onErasePoint = { x, y -> viewModel.eraseAtNormalizedPoint(x, y) },
+                                penController = penController,
+                                menuOpen = showOverlay
                             )
                         }
                     }
@@ -367,7 +382,9 @@ private fun FixedPageViewport(
     onUpdateRowSplit: (Int, Float) -> Unit,
     onCommitStroke: (List<NormalizedInkPoint>) -> Unit,
     onCommitQuadHighlight: (NormalizedRect) -> Unit,
-    onErasePoint: (Float, Float) -> Unit
+    onErasePoint: (Float, Float) -> Unit,
+    penController: OnyxPenController?,
+    menuOpen: Boolean
 ) {
     val activeStrokePoints = remember { mutableStateListOf<NormalizedInkPoint>() }
     var quadDragStart by remember { mutableStateOf<Offset?>(null) }
@@ -387,7 +404,16 @@ private fun FixedPageViewport(
     val isComic = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS
     val background = if (isComic && settings.darkGutter) EInkPureBlack else EInkPaperWhite
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(background).clipToBounds()) {
+    // Where this viewport sits in the window; Onyx's pen layer works in host-view pixels.
+    var originInRoot by remember { mutableStateOf(Offset.Zero) }
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(background)
+            .clipToBounds()
+            .onGloballyPositioned { originInRoot = it.positionInRoot() }
+    ) {
         val canvasW = constraints.maxWidth.coerceAtLeast(1)
         val canvasH = constraints.maxHeight.coerceAtLeast(1)
         val density = LocalDensity.current
@@ -422,6 +448,54 @@ private fun FixedPageViewport(
             dstTop + (py - viewportRect.top) / viewportRect.height * dstH
         )
 
+        // ---- Onyx low-latency pen layer (Boox only) -------------------------------------------
+        val penTool = state.activeStylusTool == BooxStylusTool.FOUNTAIN_PEN ||
+            state.activeStylusTool == BooxStylusTool.KALEIDO_HIGHLIGHTER
+        val penLayerActive = penController?.isAvailable == true && penTool && !menuOpen &&
+            !state.isStudioGridEditMode && bitmap != null
+        val zoomFactor = 1f / viewportRect.width
+        val highlighterInk = state.activeStylusTool == BooxStylusTool.KALEIDO_HIGHLIGHTER || state.activeSwatch.isHighlighter
+        val inkWidthPx = (if (highlighterInk) 18f * 2.2f else state.strokeWidthPt * 2.4f) * zoomFactor
+        val inkColor = state.activeSwatch.color.toArgb()
+        val limitRect = Rect(
+            (originInRoot.x + dstLeft).roundToInt(),
+            (originInRoot.y + dstTop).roundToInt(),
+            (originInRoot.x + dstLeft + dstW).roundToInt(),
+            (originInRoot.y + dstTop + dstH).roundToInt()
+        )
+        val penActiveNow by rememberUpdatedState(penLayerActive)
+        // Converts host-view pixels to page coordinates using the latest layout.
+        val rootToPage by rememberUpdatedState { x: Float, y: Float -> screenToPage(x - originInRoot.x, y - originInRoot.y) }
+        val commitStroke by rememberUpdatedState(onCommitStroke)
+        val erasePoint by rememberUpdatedState(onErasePoint)
+
+        if (penController != null) {
+            SideEffect {
+                penController.onStroke = { points ->
+                    commitStroke(points.map { p ->
+                        val (px, py) = rootToPage(p.x, p.y)
+                        NormalizedInkPoint(px, py, p.pressure)
+                    })
+                }
+                penController.onErase = { points ->
+                    points.forEach { p ->
+                        val (px, py) = rootToPage(p.x, p.y)
+                        erasePoint(px, py)
+                    }
+                }
+            }
+            LaunchedEffect(penLayerActive, limitRect, highlighterInk, inkWidthPx, inkColor) {
+                if (penLayerActive) {
+                    // Let the new page reach the panel before raw drawing holds the screen.
+                    delay(400)
+                }
+                penController.setActive(penLayerActive, limitRect, highlighterInk, inkWidthPx, inkColor)
+            }
+            DisposableEffect(penController) {
+                onDispose { penController.setActive(false, null, false, 0f, 0) }
+            }
+        }
+
         fun dispatchTap(x: Float) {
             val ratio = x / canvasW
             val (backZone, forwardZone) = if (settings.rightToLeft) (ratio > 0.75f) to (ratio < 0.25f) else (ratio < 0.25f) to (ratio > 0.75f)
@@ -440,6 +514,8 @@ private fun FixedPageViewport(
                     val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
                     val now = System.currentTimeMillis()
                     if (isStylus) lastStylusEventMillis = now
+                    // The Onyx pen layer already handles the pen; don't draw the stroke twice.
+                    if (isStylus && penActiveNow) return@pointerInteropFilter true
                     if (!isStylus && (state.palmShieldStylusOnly || now - lastStylusEventMillis < 850L)) {
                         return@pointerInteropFilter true
                     }
@@ -580,8 +656,7 @@ private fun FixedPageViewport(
                     )
                 }
 
-                // Stroke widths are in page units so they scale with zoom.
-                val zoomFactor = 1f / viewportRect.width
+                // Stroke widths are in page units so they scale with zoom (zoomFactor above).
                 state.currentPageStrokes.forEach { s ->
                     val avgPressure = s.points.map { it.pressure }.average().toFloat().coerceIn(0.2f, 1f)
                     val w = if (s.isHighlighter) s.baseWidthPt * 2.2f else s.baseWidthPt * (0.65f + avgPressure * 1.15f) * 2f

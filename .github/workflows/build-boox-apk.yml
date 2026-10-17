@@ -47,6 +47,9 @@ jobs:
           grep -E '^e: |FAILED|AssertionError|Exception' build.log | head -40 | while IFS= read -r line; do
             echo "::error::${line}"
           done
+          # Gradle's explanation of the failure, as one annotation
+          msg=$(awk '/What went wrong:/{f=1} /\* Try:/{f=0} f' build.log | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+          [ -n "$msg" ] && echo "::error title=What went wrong::${msg}" || true
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
