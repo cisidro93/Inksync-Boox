@@ -7,6 +7,9 @@ import com.example.inksyncboox.ink.NormalizedInkPoint
 import com.example.inksyncboox.ink.QuadTextHighlight
 import com.example.inksyncboox.neoflow.NormalizedRect
 import com.example.inksyncboox.study.UnifiedStudyCard
+import com.example.inksyncboox.picco.PiccoDither
+import com.example.inksyncboox.picco.PiccoLayout
+import com.example.inksyncboox.picco.PiccoOptions
 import com.example.inksyncboox.ui.main.TapLayout
 import org.json.JSONArray
 import org.json.JSONObject
@@ -55,7 +58,11 @@ data class ReaderSettings(
     /** Right-to-left page turning for manga. */
     val rightToLeft: Boolean = false,
     val panelSpotlight: Boolean = false,
-    val darkGutter: Boolean = false
+    val darkGutter: Boolean = false,
+    /** Last-used "Send to Picco" options (reading direction always comes from the reader). */
+    val picco: PiccoOptions = PiccoOptions(),
+    /** Address of the Picco that last accepted a file over Wi-Fi. */
+    val piccoHost: String = ""
 )
 
 /** Everything the user has added to one document. */
@@ -136,7 +143,18 @@ class FileReaderStore(context: Context) : ReaderStore {
             tapLayout = TapLayout.entries.firstOrNull { it.name == o.optString("tapLayout") } ?: d.tapLayout,
             rightToLeft = o.optBoolean("rightToLeft", d.rightToLeft),
             panelSpotlight = o.optBoolean("panelSpotlight", d.panelSpotlight),
-            darkGutter = o.optBoolean("darkGutter", d.darkGutter)
+            darkGutter = o.optBoolean("darkGutter", d.darkGutter),
+            picco = o.optJSONObject("picco")?.let { p ->
+                PiccoOptions(
+                    twoBit = p.optBoolean("twoBit", true),
+                    layout = PiccoLayout.entries.firstOrNull { it.name == p.optString("layout") } ?: PiccoLayout.WHOLE,
+                    autoCrop = p.optBoolean("autoCrop", true),
+                    splitSpreads = p.optBoolean("splitSpreads", true),
+                    dither = PiccoDither.entries.firstOrNull { it.name == p.optString("dither") } ?: PiccoDither.FLOYD_STEINBERG,
+                    rotateWide = p.optBoolean("rotateWide", false)
+                )
+            } ?: d.picco,
+            piccoHost = o.optString("piccoHost", d.piccoHost)
         )
     }
 
@@ -154,6 +172,17 @@ class FileReaderStore(context: Context) : ReaderStore {
             .put("rightToLeft", settings.rightToLeft)
             .put("panelSpotlight", settings.panelSpotlight)
             .put("darkGutter", settings.darkGutter)
+            .put(
+                "picco",
+                JSONObject()
+                    .put("twoBit", settings.picco.twoBit)
+                    .put("layout", settings.picco.layout.name)
+                    .put("autoCrop", settings.picco.autoCrop)
+                    .put("splitSpreads", settings.picco.splitSpreads)
+                    .put("dither", settings.picco.dither.name)
+                    .put("rotateWide", settings.picco.rotateWide)
+            )
+            .put("piccoHost", settings.piccoHost)
         writeAtomically(settingsFile, o.toString())
     }
 

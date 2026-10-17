@@ -236,8 +236,11 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    BackHandler(enabled = showOverlay || state.workspaceMode != BooxWorkspaceMode.LIBRARY) {
+    var showPicco by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = showPicco || showOverlay || state.workspaceMode != BooxWorkspaceMode.LIBRARY) {
         when {
+            showPicco -> { showPicco = false; viewModel.requestFullRefresh() }
             showOverlay -> closeOverlay()
             state.workspaceMode == BooxWorkspaceMode.STUDY_BINDER -> viewModel.returnToReader()
             else -> viewModel.selectWorkspaceMode(BooxWorkspaceMode.LIBRARY)
@@ -332,7 +335,8 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                     onDismiss = closeOverlay,
                     onOpenFile = { showOverlay = false; openFile() },
                     onOpenLibrary = { showOverlay = false; viewModel.selectWorkspaceMode(BooxWorkspaceMode.LIBRARY) },
-                    onOpenHighlights = { showOverlay = false; viewModel.selectWorkspaceMode(BooxWorkspaceMode.STUDY_BINDER) }
+                    onOpenHighlights = { showOverlay = false; viewModel.selectWorkspaceMode(BooxWorkspaceMode.STUDY_BINDER) },
+                    onOpenPicco = { showOverlay = false; showPicco = true }
                 )
                 if (state.workspaceMode != BooxWorkspaceMode.KINDLE_EPUB) {
                     PenToolbar(
@@ -345,6 +349,14 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                         modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp)
                     )
                 }
+            }
+
+            if (showPicco && state.document != null) {
+                PiccoExportScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    onClose = { showPicco = false; viewModel.requestFullRefresh() }
+                )
             }
 
             if (state.isLoading && state.workspaceMode != BooxWorkspaceMode.LIBRARY) {
@@ -897,6 +909,7 @@ private fun ReaderOverlay(
     viewModel: MainScreenViewModel,
     onDismiss: () -> Unit,
     onOpenFile: () -> Unit,
+    onOpenPicco: () -> Unit,
     onOpenLibrary: () -> Unit,
     onOpenHighlights: () -> Unit
 ) {
@@ -941,6 +954,7 @@ private fun ReaderOverlay(
                     isSelected = state.showCornellSplitScratchpad,
                     onClick = viewModel::toggleCornellSplitScratchpad
                 )
+                EInkActionPill("Picco", isSelected = false, onClick = onOpenPicco)
                 EInkActionPill("Open", isSelected = false, onClick = onOpenFile)
             }
             HorizontalDivider(thickness = 1.5.dp, color = EInkPureBlack)

@@ -653,6 +653,11 @@ class MainScreenViewModel(
 
     fun setTapLayout(layout: TapLayout) = updateSettings { it.copy(tapLayout = layout) }
 
+    fun updatePiccoOptions(transform: (com.example.inksyncboox.picco.PiccoOptions) -> com.example.inksyncboox.picco.PiccoOptions) =
+        updateSettings { it.copy(picco = transform(it.picco)) }
+
+    fun setPiccoHost(host: String) = updateSettings { it.copy(piccoHost = host) }
+
     fun togglePanelSpotlight() = updateSettings { it.copy(panelSpotlight = !it.panelSpotlight) }
 
     fun toggleDarkGutter() = updateSettings { it.copy(darkGutter = !it.darkGutter) }

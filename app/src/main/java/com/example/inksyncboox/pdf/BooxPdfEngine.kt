@@ -29,7 +29,11 @@ import kotlin.math.roundToInt
  * NeoFlow tier or comic panel stays sharp on the Note Air 4C's 300 PPI panel instead of
  * upscaling a full-page bitmap.
  */
-class BooxPdfEngine(private val context: Context) {
+class BooxPdfEngine(
+    private val context: Context,
+    /** Keeps cache files of separate engines (reader, export) apart. */
+    private val cacheTag: String = "reader"
+) {
 
     private enum class SourceKind { NONE, PDF, CBZ, EXTRACTED }
 
@@ -104,7 +108,7 @@ class BooxPdfEngine(private val context: Context) {
     suspend fun openComic(uri: Uri): Int = withContext(Dispatchers.IO) {
         renderMutex.withLock {
             closeInternal()
-            val cacheFile = File(context.cacheDir, "active_comic.bin")
+            val cacheFile = File(context.cacheDir, "comic-$cacheTag.bin")
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(cacheFile).use { output -> input.copyTo(output, 64 * 1024) }
             } ?: error("Could not open file")
@@ -130,7 +134,7 @@ class BooxPdfEngine(private val context: Context) {
                 val extracted = try {
                     ComicArchiveExtractor.extractImages(
                         archive = cacheFile,
-                        outDir = File(context.cacheDir, "comic-pages"),
+                        outDir = File(context.cacheDir, "comic-pages-$cacheTag"),
                         isImage = { name -> isComicImage(name) }
                     )
                 } catch (t: Throwable) {
@@ -247,6 +251,80 @@ class BooxPdfEngine(private val context: Context) {
         }
     }
 
+    private fun pageBytes(pageIndex: Int): ByteArray? =
+        if (sourceKind == SourceKind.EXTRACTED) {
+            extractedPages.getOrNull(pageIndex)?.readBytes()
+        } else {
+            val zip = cbzZip
+            val name = cbzEntries.getOrNull(pageIndex)
+            val entry = if (zip != null && name != null) zip.getEntry(name) else null
+            entry?.let { e -> zip!!.getInputStream(e).use { it.readBytes() } }
+        }
+
+    private fun imageSampleSize(bytes: ByteArray): Int {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth.toLong() / sample * (bounds.outHeight.toLong() / sample) > EXPORT_MAX_PIXELS) sample *= 2
+        return sample
+    }
+
+    /**
+     * Pixel size of page [pageIndex] as [exportPageArgb] decodes it (Picco export spec,
+     * section 6: images at full size unless over 16 MP; PDFs 1440 px wide).
+     */
+    suspend fun exportPageSize(pageIndex: Int): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        renderMutex.withLock {
+            when (sourceKind) {
+                SourceKind.PDF -> pdfRenderer!!.openPage(pageIndex).use { page ->
+                    EXPORT_PDF_WIDTH to ((EXPORT_PDF_WIDTH.toLong() * page.height + page.width / 2) / page.width).toInt()
+                }
+                SourceKind.CBZ, SourceKind.EXTRACTED -> {
+                    val bytes = pageBytes(pageIndex) ?: error("Page ${pageIndex + 1} is missing")
+                    val opts = BitmapFactory.Options().apply {
+                        inJustDecodeBounds = true
+                        inSampleSize = imageSampleSize(bytes)
+                    }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                    if (opts.outWidth <= 0 || opts.outHeight <= 0) error("Page ${pageIndex + 1} isn't a readable image")
+                    opts.outWidth to opts.outHeight
+                }
+                SourceKind.NONE -> error("No document open")
+            }
+        }
+    }
+
+    /** Decodes page [pageIndex] to non-premultiplied ARGB pixels at [exportPageSize]. */
+    suspend fun exportPageArgb(pageIndex: Int): IntArray = withContext(Dispatchers.IO) {
+        renderMutex.withLock {
+            val bitmap: Bitmap = when (sourceKind) {
+                SourceKind.PDF -> pdfRenderer!!.openPage(pageIndex).use { page ->
+                    val w = EXPORT_PDF_WIDTH
+                    val h = ((EXPORT_PDF_WIDTH.toLong() * page.height + page.width / 2) / page.width).toInt()
+                    Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
+                        bmp.eraseColor(Color.WHITE)
+                        val matrix = Matrix().apply { setScale(w.toFloat() / page.width, h.toFloat() / page.height) }
+                        page.render(bmp, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    }
+                }
+                SourceKind.CBZ, SourceKind.EXTRACTED -> {
+                    val bytes = pageBytes(pageIndex) ?: error("Page ${pageIndex + 1} is missing")
+                    val opts = BitmapFactory.Options().apply {
+                        inSampleSize = imageSampleSize(bytes)
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                        ?: error("Page ${pageIndex + 1} isn't a readable image")
+                }
+                SourceKind.NONE -> error("No document open")
+            }
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            bitmap.recycle()
+            pixels
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun cbzDecoderFor(pageIndex: Int): BitmapRegionDecoder? {
         if (pageIndex == cachedCbzPage && cachedCbzDecoder != null) return cachedCbzDecoder
@@ -329,6 +407,10 @@ class BooxPdfEngine(private val context: Context) {
 
         /** Width of the small render used to detect page margins. */
         private const val CROP_PROBE_WIDTH = 360
+
+        /** Picco export decode limits (export spec, section 6). */
+        private const val EXPORT_MAX_PIXELS = 16_000_000L
+        private const val EXPORT_PDF_WIDTH = 1440
 
         /** Natural ordering so "page2" sorts before "page10". */
         fun compareNaturalOrder(a: String, b: String): Int {
