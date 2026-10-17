@@ -152,10 +152,13 @@ class MainScreenViewModel(
     private val writeDispatcher = ioDispatcher.limitedParallelism(1)
 
     private val _readerState = MutableStateFlow(
-        BooxReaderState(
-            settings = store.loadSettings(),
-            recentDocuments = store.loadRecents().sortedByDescending { it.lastOpenedMillis }
-        )
+        store.loadSettings().let { settings ->
+            BooxReaderState(
+                settings = settings,
+                traversalFlow = if (settings.rightToLeft) BooxTraversalFlow.REVERSE_Z else BooxTraversalFlow.Z_FLOW,
+                recentDocuments = store.loadRecents().sortedByDescending { it.lastOpenedMillis }
+            )
+        }
     )
     val readerState: StateFlow<BooxReaderState> = _readerState.asStateFlow()
 

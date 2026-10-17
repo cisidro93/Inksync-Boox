@@ -88,7 +88,7 @@ class BooxPdfEngine(private val context: Context) {
             } ?: error("Could not open file")
 
             val zip = ZipFile(cacheFile)
-            val images = zip.entries().asSequence()
+            val images = zip.entries().toList().asSequence()
                 .filter { !it.isDirectory }
                 .map { it.name }
                 .filter { name ->
