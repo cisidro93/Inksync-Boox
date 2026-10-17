@@ -2,8 +2,10 @@ package com.example.inksyncboox
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -12,6 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.inksyncboox.data.DefaultDataRepository
@@ -35,6 +40,8 @@ class MainActivity : ComponentActivity() {
         handleIncomingIntent(intent)
 
         enableEdgeToEdge()
+        enterBooxFullScreenImmersiveMode()
+
         setContent {
             InkSyncBooxTheme {
                 Surface(
@@ -45,6 +52,31 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            enterBooxFullScreenImmersiveMode()
+        }
+    }
+
+    /**
+     * Enforces true 100% edge-to-edge full-screen reading on Boox Note Air 4C (Android 13 / Firmware V4.0),
+     * hiding Android Status & Gesture bars by default (matching NeoReader V3, KOReader, and Mihon).
+     */
+    private fun enterBooxFullScreenImmersiveMode() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     override fun onNewIntent(intent: Intent) {

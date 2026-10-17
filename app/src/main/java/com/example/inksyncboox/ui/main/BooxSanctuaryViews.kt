@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -429,6 +430,10 @@ fun BooxSanctuaryShelfView(
  * Combines Kindle's effortless serif typography and "Time left in chapter" footer with
  * 1-tap Kaleido 3 paragraph highlighting (anchored by CFI) and optional Split-Screen Cornell Scratchpad.
  */
+@OptIn(
+    ExperimentalComposeUiApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
+)
 @Composable
 fun BooxKindleEpubReaderView(
     state: BooxReaderState,
@@ -443,24 +448,46 @@ fun BooxKindleEpubReaderView(
     val chapter = state.currentEpubChapter
     val preset = state.epubTypographyPreset
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(EInkPaperWhite)
-            .clickable(onClick = onToggleReaderOverlay)
     ) {
-        // Full-Bleed Bookerly-Style 300 PPI Reflow Page (100% Edge-to-Edge)
+        val screenWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        var lastTapX by remember { androidx.compose.runtime.mutableFloatStateOf(screenWidthPx * 0.5f) }
+
+        fun dispatchPageTapZone() {
+            val ratio = (lastTapX / screenWidthPx).coerceIn(0f, 1f)
+            when {
+                ratio < 0.24f -> onStepPrevChapter()
+                ratio > 0.76f -> onStepNextChapter()
+                else -> onToggleReaderOverlay()
+            }
+        }
+
+        // Full-Bleed Bookerly-Style 300 PPI Reflow Page (100% Edge-to-Edge across all 1860x2480 pixels)
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 44.dp, vertical = 32.dp)
+                .pointerInteropFilter { event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        lastTapX = event.x
+                    }
+                    false
+                }
+                .clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = { dispatchPageTapZone() }
+                )
+                .padding(horizontal = 48.dp, vertical = 28.dp),
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Subtle Chapter Running Header (like a real printed book / Kindle page)
+            // 1. Subtle Printed-Book Running Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 20.dp),
+                    .padding(bottom = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -474,83 +501,127 @@ fun BooxKindleEpubReaderView(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${chapter.title} · Tap center for menu",
+                    text = chapter.title.uppercase(),
                     color = EInkMutedText,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
-                    fontFamily = FontFamily.SansSerif
+                    fontFamily = FontFamily.SansSerif,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            if (state.epubTwoColumnMode) {
-                val mid = (chapter.paragraphs.size + 1) / 2
-                val leftCol = chapter.paragraphs.take(mid)
-                val rightCol = chapter.paragraphs.drop(mid)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(36.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+            // 2. Main Bookerly 300 PPI Reflow Body (1-Column or 2-Column Spread)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                val isHighlightToolActive = state.activeStylusTool != BooxStylusTool.NAVIGATE
+
+                if (state.epubTwoColumnMode) {
+                    val mid = (chapter.paragraphs.size + 1) / 2
+                    val leftCol = chapter.paragraphs.take(mid)
+                    val rightCol = chapter.paragraphs.drop(mid)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(40.dp)
                     ) {
-                        leftCol.forEach { para ->
-                            EpubParagraphBlock(
-                                paragraph = para,
-                                fontSizeSp = preset.fontSizeSp,
-                                lineHeightMultiplier = preset.lineHeightMultiplier,
-                                highlightSwatch = state.epubHighlightedCfis[para.cfiId],
-                                onClick = {
-                                    onToggleParagraphHighlight(
-                                        para.cfiId,
-                                        para.text,
-                                        para.chapterIndex,
-                                        para.indexInChapter
-                                    )
-                                }
-                            )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            leftCol.forEach { para ->
+                                EpubParagraphBlock(
+                                    paragraph = para,
+                                    fontSizeSp = preset.fontSizeSp,
+                                    lineHeightMultiplier = preset.lineHeightMultiplier,
+                                    highlightSwatch = state.epubHighlightedCfis[para.cfiId],
+                                    onTap = {
+                                        if (isHighlightToolActive) {
+                                            onToggleParagraphHighlight(
+                                                para.cfiId,
+                                                para.text,
+                                                para.chapterIndex,
+                                                para.indexInChapter
+                                            )
+                                        } else {
+                                            dispatchPageTapZone()
+                                        }
+                                    },
+                                    onLongPress = {
+                                        onToggleParagraphHighlight(
+                                            para.cfiId,
+                                            para.text,
+                                            para.chapterIndex,
+                                            para.indexInChapter
+                                        )
+                                    }
+                                )
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .fillMaxHeight()
+                                .background(EInkBorderGray)
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            rightCol.forEach { para ->
+                                EpubParagraphBlock(
+                                    paragraph = para,
+                                    fontSizeSp = preset.fontSizeSp,
+                                    lineHeightMultiplier = preset.lineHeightMultiplier,
+                                    highlightSwatch = state.epubHighlightedCfis[para.cfiId],
+                                    onTap = {
+                                        if (isHighlightToolActive) {
+                                            onToggleParagraphHighlight(
+                                                para.cfiId,
+                                                para.text,
+                                                para.chapterIndex,
+                                                para.indexInChapter
+                                            )
+                                        } else {
+                                            dispatchPageTapZone()
+                                        }
+                                    },
+                                    onLongPress = {
+                                        onToggleParagraphHighlight(
+                                            para.cfiId,
+                                            para.text,
+                                            para.chapterIndex,
+                                            para.indexInChapter
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .fillMaxHeight()
-                            .background(EInkBorderGray)
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        rightCol.forEach { para ->
-                            EpubParagraphBlock(
-                                paragraph = para,
-                                fontSizeSp = preset.fontSizeSp,
-                                lineHeightMultiplier = preset.lineHeightMultiplier,
-                                highlightSwatch = state.epubHighlightedCfis[para.cfiId],
-                                onClick = {
-                                    onToggleParagraphHighlight(
-                                        para.cfiId,
-                                        para.text,
-                                        para.chapterIndex,
-                                        para.indexInChapter
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
+                } else {
                     chapter.paragraphs.forEach { para ->
                         EpubParagraphBlock(
                             paragraph = para,
                             fontSizeSp = preset.fontSizeSp,
                             lineHeightMultiplier = preset.lineHeightMultiplier,
                             highlightSwatch = state.epubHighlightedCfis[para.cfiId],
-                            onClick = {
+                            onTap = {
+                                if (isHighlightToolActive) {
+                                    onToggleParagraphHighlight(
+                                        para.cfiId,
+                                        para.text,
+                                        para.chapterIndex,
+                                        para.indexInChapter
+                                    )
+                                } else {
+                                    dispatchPageTapZone()
+                                }
+                            },
+                            onLongPress = {
                                 onToggleParagraphHighlight(
                                     para.cfiId,
                                     para.text,
@@ -563,18 +634,40 @@ fun BooxKindleEpubReaderView(
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            // 3. Subtle Printed-Book Running Footer (matches Kindle / NeoReader V3)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Chapter ${state.epubChapterIndex + 1} of ${state.activeEpubBook.chapters.size}  ·  ~${chapter.estimatedMinutes} min left",
+                    color = EInkMutedText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.SansSerif
+                )
+                Text(
+                    text = "Long-press paragraph to highlight  ·  Tap center for menu",
+                    color = EInkMutedText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.SansSerif
+                )
+            }
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun EpubParagraphBlock(
     paragraph: com.example.inksyncboox.epub.EpubParagraph,
     fontSizeSp: Float,
     lineHeightMultiplier: Float,
     highlightSwatch: com.example.inksyncboox.theme.KaleidoInkSwatch?,
-    onClick: () -> Unit
+    onTap: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     val bgColor = highlightSwatch?.color?.copy(alpha = 0.45f) ?: Color.Transparent
     Column(
@@ -588,7 +681,12 @@ private fun EpubParagraphBlock(
                     Modifier
                 }
             )
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = onTap,
+                onLongClick = onLongPress
+            )
             .padding(
                 horizontal = if (highlightSwatch != null || paragraph.isBlockQuote) 12.dp else 4.dp,
                 vertical = 6.dp

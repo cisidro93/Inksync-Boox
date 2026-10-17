@@ -1,7 +1,6 @@
 package com.example.inksyncboox
 
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.entryProvider
@@ -22,13 +21,13 @@ fun MainNavigation(viewModel: MainScreenViewModel? = null) {
                 if (viewModel != null) {
                     MainScreen(
                         onItemClick = { navKey -> backStack.add(navKey) },
-                        modifier = Modifier.safeDrawingPadding().fillMaxSize(),
+                        modifier = Modifier.fillMaxSize(),
                         viewModel = viewModel
                     )
                 } else {
                     MainScreen(
                         onItemClick = { navKey -> backStack.add(navKey) },
-                        modifier = Modifier.safeDrawingPadding().fillMaxSize()
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }
