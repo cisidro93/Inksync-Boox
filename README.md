@@ -7,7 +7,8 @@ A reader for the **Onyx Boox Note Air 4C** (10.3", Kaleido 3 color e-ink, Androi
 - **Library** of recently opened documents. Each one reopens on the page you left, and the last document reopens when you launch the app.
 - **EPUB reader** with real pagination: one screen per page, four text sizes, one or two columns, bold/italic kept, images (covers and illustrations, scaled to fit), chapter list. Long-press a paragraph to highlight it.
 - **PDF and comic viewer** that renders each page (or zoomed region) at screen resolution, so text stays sharp on the 300 PPI panel.
-- **Comics and manga**: CBZ, CBR (RAR4 and RAR5) and CB7 archives; right-to-left page turning for manga; optional black background; natural page ordering.
+- **Comics and manga**: CBZ, CBR (RAR4 and RAR5) and CB7 archives; right-to-left page turning for manga; wide two-page spreads shown as two screens (right half first for manga); optional black background; natural page ordering.
+- **Page display**: automatic margin cropping (detected per page), grayscale mode (full 300 PPI on the Kaleido 3 panel instead of the 150 PPI color layer), contrast boost, and the next two views rendered ahead so page turns don't wait.
 - **Tiers ("NeoFlow")**: split a page into a grid (2×1, 2×2, 3×3, …) and step through it with page turns. Useful for two-column papers and comic panels on a portrait screen.
 - **Pen**: write, highlight, mark an area, or erase on PDF and comic pages, with palm rejection. On Boox, the Pen and Marker tools use Onyx's low-latency pen layer, and the pen's eraser end erases. A side notes pane (Cornell, ruled, or dot grid) sits next to any document. A quick pen tap in reading mode turns the page instead of leaving a dot.
 - **Highlights** per document, with jump-to-source and Markdown export to any folder you choose.
@@ -19,11 +20,11 @@ Everything you add (position, highlights, ink, notes) is saved automatically on 
 
 | Input | Next | Previous |
 |---|---|---|
-| Tap | right quarter of the screen | left quarter |
-| Tap (manga mode) | left quarter | right quarter |
+| Tap, "Left / right edges" layout | right quarter | left quarter |
+| Tap, "Kindle style" layout (top third opens the menu) | anywhere except the left third | left third |
 | Keys / remotes | Volume down, Page down, →, ↓, Space | Volume up, Page up, ←, ↑ |
 
-Tap the middle of the page for the menu. Back closes the menu, then returns to the library.
+Manga mode mirrors the tap zones. Tap the middle of the page (or the top third in Kindle style) for the menu. Back closes the menu, then returns to the library.
 
 ## E-ink refresh on Boox
 
@@ -38,6 +39,10 @@ With the Pen or Marker tool selected, ink is drawn by Onyx's firmware through `T
 ## Comics in RAR and 7-Zip
 
 `.cbr` and `.cb7` files are read with [libarchive-android](https://github.com/zhanghai/libarchive-android) (as Mihon does), which handles RAR5. These formats are often "solid", so the pages are unpacked once into the app cache when the comic opens; large archives take a few seconds. Files named `.cbr` that are really zips are detected and read directly.
+
+## Ideas borrowed from Mihon and Aidoku
+
+Margin detection is ported from Aidoku's `CropBordersProcessor` (near-white and near-black pixels count as border). The "Kindle style" tap layout is Mihon's `KindlishNavigation`. Spread splitting and page preloading follow both apps' readers.
 
 ## Limitations
 
