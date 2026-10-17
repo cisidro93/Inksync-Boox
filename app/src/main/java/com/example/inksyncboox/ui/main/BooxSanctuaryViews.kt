@@ -349,7 +349,7 @@ fun BooxSanctuaryShelfView(
                         )
                     }
                     Text(
-                        text = if (state.traversalFlow == com.example.inksyncboox.neoflow.BooxTraversalFlow.MANGA_RTL) "RTL Manga ←" else "LTR Western →",
+                        text = state.traversalFlow.symbol,
                         color = EInkPureBlack,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
