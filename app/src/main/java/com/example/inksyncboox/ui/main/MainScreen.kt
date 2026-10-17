@@ -312,53 +312,201 @@ internal fun BooxWorkspaceContent(
     onToggleHighContrast: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxSize()
-            .background(EInkSurfaceGray)
-    ) {
-        // 1. SLEEK LEFT BOOX OS 4.0 VERTICAL NAVIGATION & TOOL RAIL
-        BooxLeftNavigationRail(
-            state = state,
-            onSelectWorkspaceMode = onSelectWorkspaceMode,
-            onToggleCornellSplit = onToggleCornellSplit,
-            onManualRegalFlash = onManualRegalFlash,
-            onOpenPdfClick = onOpenPdfClick
-        )
+    val isLibraryOrBinder = state.workspaceMode == BooxWorkspaceMode.SANCTUARY_SHELF ||
+        state.workspaceMode == BooxWorkspaceMode.STUDY_BINDER
 
-        // Vertical 1dp warm stone divider
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .fillMaxHeight()
-                .background(EInkBorderGray)
-        )
+    var showReaderOverlayMenu by remember { mutableStateOf(false) }
+    var isFloatingStylusExpanded by remember { mutableStateOf(false) }
 
-        // 2. RIGHT MAIN CONTENT AREA
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .background(Color(0xFFFAF9F5))
+    if (isLibraryOrBinder) {
+        // =========================================================================
+        // 1. BOOX OS 4.0 LIBRARY & STUDY BINDER SHELL (LEFT SIDEBAR + FULL SHELF)
+        // =========================================================================
+        Row(
+            modifier = modifier
+                .fillMaxSize()
+                .background(EInkSurfaceGray)
         ) {
-            // Sleek Floating Boox OS 4.0 Top Header + Pill Stylus Bar
-            BooxCommandHeaderBar(
+            BooxLeftNavigationRail(
                 state = state,
-                onSelectTool = onSelectTool,
-                onSelectSwatch = onSelectSwatch,
-                onUndo = onUndo,
-                onClearAnnotations = onClearAnnotations,
-                onTogglePalmShield = onTogglePalmShield,
-                onCycleRefreshMode = onCycleRefreshMode,
-                onToggleHighContrast = onToggleHighContrast
+                onSelectWorkspaceMode = { mode ->
+                    showReaderOverlayMenu = false
+                    onSelectWorkspaceMode(mode)
+                },
+                onToggleCornellSplit = onToggleCornellSplit,
+                onManualRegalFlash = onManualRegalFlash,
+                onOpenPdfClick = onOpenPdfClick
             )
 
-            HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .fillMaxHeight()
+                    .background(EInkBorderGray)
+            )
 
-            // Contextual NeoFlow / Panels Studio Pill Strip when in PDF or PANELS_COMICS Mode
-            if (state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW || state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS) {
-                NeoFlowControlStrip(
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(EInkPaperWhite)
+            ) {
+                when (state.workspaceMode) {
+                    BooxWorkspaceMode.SANCTUARY_SHELF -> {
+                        BooxSanctuaryShelfView(
+                            state = state,
+                            onSelectMode = { mode ->
+                                showReaderOverlayMenu = false
+                                onSelectWorkspaceMode(mode)
+                            },
+                            onOpenLocalPdf = onOpenPdfClick,
+                            onDismissWelcomeBanner = onDismissWelcomeBanner,
+                            onJumpToCard = onJumpToStudyCard
+                        )
+                    }
+                    BooxWorkspaceMode.STUDY_BINDER -> {
+                        BooxStudyHubBinderView(
+                            state = state,
+                            onJumpToCard = onJumpToStudyCard,
+                            onExportSidecars = onUpdateSidecarExportStatus
+                        )
+                    }
+                    else -> Unit
+                }
+            }
+        }
+    } else {
+        // =========================================================================
+        // 2. 100% FULL-SCREEN EDGE-TO-EDGE NEOREADER V3 CANVAS
+        //    Zero permanent sidebars, zero outer padding, zero boxy borders.
+        //    - Center-Tap toggles Floating Top & Bottom NeoReader V3 Overlays
+        //    - Left 24% / Right 24% Tap steps backward/forward
+        //    - Right-Edge Collapsible Floating Wacom Stylus Pill (✒)
+        //    - 20.dp Whisper-Quiet Micro Footer at bottom edge
+        // =========================================================================
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(EInkPaperWhite)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Full-Bleed Reader Row (100% width, or Split-Screen with Cornell Notes)
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(if (state.showCornellSplitScratchpad) 0.62f else 1f)
+                            .fillMaxHeight()
+                    ) {
+                        when (state.workspaceMode) {
+                            BooxWorkspaceMode.PANELS_COMICS,
+                            BooxWorkspaceMode.PDF_NEOFLOW -> {
+                                BooxPdfNeoFlowViewport(
+                                    state = state,
+                                    pageBitmap = pageBitmap,
+                                    onStepPrev = {
+                                        showReaderOverlayMenu = false
+                                        onStepPrev()
+                                    },
+                                    onStepNext = {
+                                        showReaderOverlayMenu = false
+                                        onStepNext()
+                                    },
+                                    onSelectBlock = onSelectBlock,
+                                    onUpdateColSplit = onUpdateColSplit,
+                                    onUpdateRowSplit = onUpdateRowSplit,
+                                    onCommitStroke = onCommitStroke,
+                                    onCommitQuadHighlight = onCommitQuadHighlight,
+                                    onErasePoint = onErasePoint,
+                                    onToggleReaderOverlay = {
+                                        showReaderOverlayMenu = !showReaderOverlayMenu
+                                    }
+                                )
+                            }
+                            BooxWorkspaceMode.KINDLE_EPUB -> {
+                                BooxKindleEpubReaderView(
+                                    state = state,
+                                    onCycleTypography = onCycleEpubTypography,
+                                    onToggleTwoColumn = onToggleEpubTwoColumn,
+                                    onToggleParagraphHighlight = onToggleEpubParagraphHighlight,
+                                    onStepPrevChapter = {
+                                        showReaderOverlayMenu = false
+                                        onStepPrev()
+                                    },
+                                    onStepNextChapter = {
+                                        showReaderOverlayMenu = false
+                                        onStepNext()
+                                    },
+                                    onToggleReaderOverlay = {
+                                        showReaderOverlayMenu = !showReaderOverlayMenu
+                                    }
+                                )
+                            }
+                            else -> Unit
+                        }
+                    }
+
+                    if (state.showCornellSplitScratchpad) {
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .fillMaxHeight()
+                                .background(EInkPureBlack)
+                        )
+                        BooxCornellScratchpadPane(
+                            state = state,
+                            onCycleTemplate = onCycleCornellTemplate,
+                            onCommitScratchpadStroke = onCommitCornellStroke,
+                            onClearScratchpad = onClearCornellScratchpad,
+                            modifier = Modifier
+                                .weight(0.38f)
+                                .fillMaxHeight()
+                        )
+                    }
+                }
+
+                // Whisper-Quiet 20.dp NeoReader V3 Micro Status Bar at Bottom Edge
+                BooxFullScreenMicroStatusBar(
                     state = state,
+                    onClickStatusBar = { showReaderOverlayMenu = !showReaderOverlayMenu }
+                )
+            }
+
+            // Collapsible Right-Edge Floating Wacom Stylus Pill (Boox Notes 4.0 Style)
+            BooxFloatingStylusEdgePill(
+                state = state,
+                isExpanded = isFloatingStylusExpanded,
+                onToggleExpanded = { isFloatingStylusExpanded = !isFloatingStylusExpanded },
+                onSelectTool = onSelectTool,
+                onSelectSwatch = onSelectSwatch,
+                onTogglePalmShield = onTogglePalmShield,
+                onUndo = onUndo,
+                onClearAnnotations = onClearAnnotations,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 8.dp)
+            )
+
+            // Center-Tap Floating NeoReader V3 Top & Bottom Overlay Menus
+            if (showReaderOverlayMenu) {
+                BooxFloatingNeoReaderOverlay(
+                    state = state,
+                    onDismissOverlay = { showReaderOverlayMenu = false },
+                    onReturnToLibrary = {
+                        showReaderOverlayMenu = false
+                        onSelectWorkspaceMode(BooxWorkspaceMode.SANCTUARY_SHELF)
+                    },
+                    onOpenStudyBinder = {
+                        showReaderOverlayMenu = false
+                        onSelectWorkspaceMode(BooxWorkspaceMode.STUDY_BINDER)
+                    },
+                    onSelectWorkspaceMode = onSelectWorkspaceMode,
+                    onToggleCornellSplit = onToggleCornellSplit,
+                    onManualRegalFlash = onManualRegalFlash,
+                    onOpenPdfClick = onOpenPdfClick,
                     onSelectPreset = onSelectPreset,
                     onSelectFlow = onSelectFlow,
                     onToggleStudioEdit = onToggleStudioEdit,
@@ -368,107 +516,15 @@ internal fun BooxWorkspaceContent(
                     onTogglePanelsBleed = onTogglePanelsBleed,
                     onToggleKaleidoBoost = onToggleKaleidoBoost,
                     onToggleMarginTrim = onToggleMarginTrim,
-                    onResetGridSplits = onResetGridSplits
+                    onResetGridSplits = onResetGridSplits,
+                    onCycleEpubTypography = onCycleEpubTypography,
+                    onToggleEpubTwoColumn = onToggleEpubTwoColumn,
+                    onCycleRefreshMode = onCycleRefreshMode,
+                    onToggleHighContrast = onToggleHighContrast,
+                    onStepPrev = onStepPrev,
+                    onStepNext = onStepNext
                 )
-                HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
             }
-
-            // Central Unified Workspace + Optional Split-Screen Cornell Notebook
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(Color(0xFFFAF9F5))
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Surface(
-                    modifier = Modifier
-                        .weight(if (state.showCornellSplitScratchpad) 0.60f else 1f)
-                        .fillMaxHeight(),
-                    shape = RoundedCornerShape(16.dp),
-                    color = EInkPaperWhite,
-                    border = BorderStroke(1.dp, EInkBorderGray)
-                ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        when (state.workspaceMode) {
-                            BooxWorkspaceMode.SANCTUARY_SHELF -> {
-                                BooxSanctuaryShelfView(
-                                    state = state,
-                                    onSelectMode = onSelectWorkspaceMode,
-                                    onOpenLocalPdf = onOpenPdfClick,
-                                    onDismissWelcomeBanner = onDismissWelcomeBanner,
-                                    onJumpToCard = onJumpToStudyCard
-                                )
-                            }
-                            BooxWorkspaceMode.PANELS_COMICS,
-                            BooxWorkspaceMode.PDF_NEOFLOW -> {
-                                BooxPdfNeoFlowViewport(
-                                    state = state,
-                                    pageBitmap = pageBitmap,
-                                    onStepPrev = onStepPrev,
-                                    onStepNext = onStepNext,
-                                    onSelectBlock = onSelectBlock,
-                                    onUpdateColSplit = onUpdateColSplit,
-                                    onUpdateRowSplit = onUpdateRowSplit,
-                                    onCommitStroke = onCommitStroke,
-                                    onCommitQuadHighlight = onCommitQuadHighlight,
-                                    onErasePoint = onErasePoint
-                                )
-                            }
-                            BooxWorkspaceMode.KINDLE_EPUB -> {
-                                BooxKindleEpubReaderView(
-                                    state = state,
-                                    onCycleTypography = onCycleEpubTypography,
-                                    onToggleTwoColumn = onToggleEpubTwoColumn,
-                                    onToggleParagraphHighlight = onToggleEpubParagraphHighlight,
-                                    onStepPrevChapter = onStepPrev,
-                                    onStepNextChapter = onStepNext
-                                )
-                            }
-                            BooxWorkspaceMode.STUDY_BINDER -> {
-                                BooxStudyHubBinderView(
-                                    state = state,
-                                    onJumpToCard = onJumpToStudyCard,
-                                    onExportSidecars = onUpdateSidecarExportStatus
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (state.showCornellSplitScratchpad) {
-                    Surface(
-                        modifier = Modifier
-                            .weight(0.40f)
-                            .fillMaxHeight(),
-                        shape = RoundedCornerShape(16.dp),
-                        color = EInkPaperWhite,
-                        border = BorderStroke(1.dp, EInkBorderGray)
-                    ) {
-                        BooxCornellScratchpadPane(
-                            state = state,
-                            onCycleTemplate = onCycleCornellTemplate,
-                            onCommitScratchpadStroke = onCommitCornellStroke,
-                            onClearScratchpad = onClearCornellScratchpad,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
-
-            // Minimalist Boox OS 4.0 / Kindle Scribe Progress & Quadrant Step Bar
-            BooxWacomStylusDock(
-                state = state,
-                onSelectTool = onSelectTool,
-                onSelectSwatch = onSelectSwatch,
-                onUndo = onUndo,
-                onClearAnnotations = onClearAnnotations,
-                onStepPrev = onStepPrev,
-                onStepNext = onStepNext
-            )
         }
     }
 }
@@ -641,139 +697,7 @@ private fun BooxLeftNavigationRail(
     }
 }
 
-@Composable
-private fun BooxCommandHeaderBar(
-    state: BooxReaderState,
-    onSelectTool: (BooxStylusTool) -> Unit,
-    onSelectSwatch: (com.example.inksyncboox.theme.KaleidoInkSwatch) -> Unit,
-    onUndo: () -> Unit,
-    onClearAnnotations: () -> Unit,
-    onTogglePalmShield: () -> Unit,
-    onCycleRefreshMode: () -> Unit,
-    onToggleHighContrast: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFFFAF9F5))
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        // Left: Active Book Title + Subtle Mode Pill
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = state.documentTitle,
-                color = EInkPureBlack,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.SansSerif,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = EInkSurfaceGray,
-                border = BorderStroke(1.dp, EInkBorderGray)
-            ) {
-                Text(
-                    text = "${state.refreshMode.title} · ${if (state.highContrastBAndW) "300 PPI B&W" else "Kaleido 3"}",
-                    color = EInkMutedText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clickable(onClick = onCycleRefreshMode)
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                )
-            }
-        }
 
-        // Right: Floating Pill Wacom Stylus Bar (Boox Notes 4.0 Style)
-        Surface(
-            shape = RoundedCornerShape(50),
-            color = EInkPaperWhite,
-            border = BorderStroke(1.dp, EInkBorderGray)
-        ) {
-            Row(
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                BooxStylusTool.entries.forEach { tool ->
-                    val isSelected = state.activeStylusTool == tool
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (isSelected) EInkPureBlack else Color.Transparent,
-                        modifier = Modifier.clickable { onSelectTool(tool) }
-                    ) {
-                        Text(
-                            text = tool.label,
-                            color = if (isSelected) EInkPaperWhite else EInkMutedText,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(18.dp)
-                        .background(EInkBorderGray)
-                )
-
-                // Circular Kaleido 3 Color Swatches
-                BooxPenSwatches.take(5).forEach { swatch ->
-                    val isSelected = state.activeSwatch.id == swatch.id
-                    Box(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .background(swatch.color, CircleShape)
-                            .border(
-                                width = if (isSelected) 2.5.dp else 1.dp,
-                                color = if (isSelected) EInkPureBlack else EInkBorderGray,
-                                shape = CircleShape
-                            )
-                            .clickable { onSelectSwatch(swatch) }
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .height(18.dp)
-                        .background(EInkBorderGray)
-                )
-
-                Text(
-                    text = "Undo",
-                    color = EInkMutedText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clickable(onClick = onUndo)
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                )
-                Text(
-                    text = "Clear",
-                    color = EInkMutedText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clickable(onClick = onClearAnnotations)
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun NeoFlowControlStrip(
@@ -916,7 +840,8 @@ private fun BooxPdfNeoFlowViewport(
     onUpdateRowSplit: (Int, Float) -> Unit,
     onCommitStroke: (List<NormalizedInkPoint>, String) -> Unit,
     onCommitQuadHighlight: (NormalizedRect, String) -> Unit,
-    onErasePoint: (Float, Float) -> Unit
+    onErasePoint: (Float, Float) -> Unit,
+    onToggleReaderOverlay: () -> Unit = {}
 ) {
     val activeStrokePoints = remember { mutableStateListOf<NormalizedInkPoint>() }
     var quadDragStart by remember { mutableStateOf<Offset?>(null) }
@@ -1086,18 +1011,13 @@ private fun BooxPdfNeoFlowViewport(
                             if (motionEvent.actionMasked == MotionEvent.ACTION_UP && !state.isStudioGridEditMode) {
                                 val tapXRatio = motionEvent.x / canvasWidthPx
                                 when {
+                                    // Authentic Boox NeoReader V3 Tap Zones:
+                                    // Left 24% -> Previous Panel/Page
+                                    // Right 24% -> Next Panel/Page
+                                    // Center 52% -> Toggle Floating NeoReader Overlay Menu
                                     tapXRatio < 0.24f -> onStepPrev()
                                     tapXRatio > 0.76f -> onStepNext()
-                                    else -> {
-                                        val (px, py) = screenToPageNormalized(motionEvent.x, motionEvent.y)
-                                        val hit = blocks.firstOrNull { b ->
-                                            px in b.baseRect.left..b.baseRect.right &&
-                                                py in b.baseRect.top..b.baseRect.bottom
-                                        }
-                                        if (hit != null) {
-                                            onSelectBlock(hit.stepIndex, !state.isZoomedToTier)
-                                        }
-                                    }
+                                    else -> onToggleReaderOverlay()
                                 }
                             }
                             true
@@ -1361,89 +1281,486 @@ private fun BooxPdfNeoFlowViewport(
                 }
             }
         }
+    }
+}
 
-        Surface(
+/**
+ * Whisper-Quiet 20.dp NeoReader V3 Micro Status Bar at the bottom edge of 100% Full-Screen Readers.
+ */
+@Composable
+private fun BooxFullScreenMicroStatusBar(
+    state: BooxReaderState,
+    onClickStatusBar: () -> Unit
+) {
+    val isDarkBleed = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS && state.panelsDarkGutterBleed
+    val barBg = if (isDarkBleed) Color(0xFF141417) else EInkPaperWhite
+    val barText = if (isDarkBleed) Color(0xFF9CA3AF) else EInkMutedText
+    val dividerColor = if (isDarkBleed) Color(0xFF27272A) else EInkBorderGray
+
+    val totalSteps = max(1, state.computedBlocks.size)
+    val statusMiddle = when (state.workspaceMode) {
+        BooxWorkspaceMode.KINDLE_EPUB -> {
+            "Ch ${state.epubChapterIndex + 1}/${state.activeEpubBook.chapters.size} · ~${state.currentEpubChapter.estimatedMinutes}m left · Tap center for menu"
+        }
+        BooxWorkspaceMode.PANELS_COMICS -> {
+            "Page ${state.pageIndex + 1}/${state.pageCount} · Panel ${state.activeStepIndex + 1}/$totalSteps · Tap center for menu"
+        }
+        else -> {
+            "Page ${state.pageIndex + 1}/${state.pageCount} · Tier ${state.currentBlock.label} (${state.activeStepIndex + 1}/$totalSteps) · Tap center for menu"
+        }
+    }
+    val progressPct = when (state.workspaceMode) {
+        BooxWorkspaceMode.KINDLE_EPUB -> {
+            (((state.epubChapterIndex + 1).toFloat() / max(1, state.activeEpubBook.chapters.size).toFloat()) * 100).roundToInt()
+        }
+        else -> {
+            (((state.activeStepIndex + 1).toFloat() / totalSteps.toFloat()) * 100).roundToInt()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(barBg)
+            .clickable(onClick = onClickStatusBar)
+    ) {
+        HorizontalDivider(thickness = 0.5.dp, color = dividerColor)
+        Row(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(12.dp),
-            shape = RoundedCornerShape(50),
-            color = EInkPaperWhite,
-            border = BorderStroke(1.dp, EInkBorderGray)
+                .fillMaxWidth()
+                .height(20.dp)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "Page ${state.pageIndex + 1} of ${state.pageCount} · Quadrant ${currentBlock.label}",
-                color = EInkPureBlack,
-                fontSize = 11.sp,
+                text = if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) state.activeEpubBook.title else state.documentTitle,
+                color = barText,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
                 fontFamily = FontFamily.SansSerif,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = statusMiddle,
+                color = barText,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.SansSerif
+            )
+            Text(
+                text = "${progressPct.coerceIn(1, 100)}%  ·  ${state.refreshMode.title}",
+                color = barText,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.SansSerif,
+                modifier = Modifier.padding(start = 12.dp)
             )
         }
     }
 }
 
+/**
+ * Collapsible Floating Wacom Stylus Pill (Boox Notes 4.0 / NeoReader V3 Style).
+ * Docks unobtrusively on the right edge as a tiny `✒` pill when collapsed, or expands into
+ * a floating vertical stylus bar without shrinking the underlying full-screen document.
+ */
 @Composable
-private fun BooxWacomStylusDock(
+private fun BooxFloatingStylusEdgePill(
     state: BooxReaderState,
+    isExpanded: Boolean,
+    onToggleExpanded: () -> Unit,
     onSelectTool: (BooxStylusTool) -> Unit,
     onSelectSwatch: (com.example.inksyncboox.theme.KaleidoInkSwatch) -> Unit,
+    onTogglePalmShield: () -> Unit,
     onUndo: () -> Unit,
     onClearAnnotations: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (!isExpanded) {
+        Surface(
+            modifier = modifier
+                .clickable(onClick = onToggleExpanded),
+            shape = RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp, topEnd = 6.dp, bottomEnd = 6.dp),
+            color = EInkPaperWhite,
+            border = BorderStroke(1.5.dp, EInkPureBlack)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "✒",
+                    color = EInkPureBlack,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(state.activeSwatch.color, CircleShape)
+                        .border(1.dp, EInkPureBlack, CircleShape)
+                )
+            }
+        }
+    } else {
+        Surface(
+            modifier = modifier,
+            shape = RoundedCornerShape(24.dp),
+            color = EInkPaperWhite,
+            border = BorderStroke(1.5.dp, EInkPureBlack)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val toolGlyphs = listOf(
+                    Triple(BooxStylusTool.NAVIGATE, "↖", "Nav"),
+                    Triple(BooxStylusTool.FOUNTAIN_PEN, "✒", "Pen"),
+                    Triple(BooxStylusTool.KALEIDO_HIGHLIGHTER, "🖍", "Mark"),
+                    Triple(BooxStylusTool.QUAD_HIGHLIGHT, "▭", "Quad"),
+                    Triple(BooxStylusTool.ERASER, "⌫", "Erase")
+                )
+
+                toolGlyphs.forEach { (tool, glyph, shortLabel) ->
+                    val isSelected = state.activeStylusTool == tool
+                    Surface(
+                        modifier = Modifier
+                            .size(width = 42.dp, height = 36.dp)
+                            .clickable { onSelectTool(tool) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) EInkPureBlack else Color.Transparent
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = glyph,
+                                color = if (isSelected) EInkPaperWhite else EInkPureBlack,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = shortLabel,
+                                color = if (isSelected) EInkPaperWhite else EInkMutedText,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.width(28.dp),
+                    thickness = 1.dp,
+                    color = EInkBorderGray
+                )
+
+                BooxPenSwatches.take(5).forEach { swatch ->
+                    val isSelected = state.activeSwatch.id == swatch.id
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .background(swatch.color, CircleShape)
+                            .border(
+                                width = if (isSelected) 2.5.dp else 1.dp,
+                                color = if (isSelected) EInkPureBlack else EInkBorderGray,
+                                shape = CircleShape
+                            )
+                            .clickable { onSelectSwatch(swatch) }
+                    )
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.width(28.dp),
+                    thickness = 1.dp,
+                    color = EInkBorderGray
+                )
+
+                Surface(
+                    modifier = Modifier
+                        .size(width = 42.dp, height = 28.dp)
+                        .clickable(onClick = onTogglePalmShield),
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (state.palmShieldStylusOnly) EInkPureBlack else EInkSurfaceGray
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = if (state.palmShieldStylusOnly) "✋On" else "✋",
+                            color = if (state.palmShieldStylusOnly) EInkPaperWhite else EInkPureBlack,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                Text(
+                    text = "↶",
+                    color = EInkPureBlack,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clickable(onClick = onUndo)
+                        .padding(4.dp)
+                )
+
+                Surface(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clickable(onClick = onToggleExpanded),
+                    shape = CircleShape,
+                    color = EInkSurfaceGray
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "×",
+                            color = EInkPureBlack,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Authentic Boox OS 4.0 / NeoReader V3 Center-Tap Floating Top & Bottom Overlay Menu.
+ * Appears only when the user taps the center of the full-screen reader; tapping the page dismisses it.
+ */
+@Composable
+private fun BooxFloatingNeoReaderOverlay(
+    state: BooxReaderState,
+    onDismissOverlay: () -> Unit,
+    onReturnToLibrary: () -> Unit,
+    onOpenStudyBinder: () -> Unit,
+    onSelectWorkspaceMode: (BooxWorkspaceMode) -> Unit,
+    onToggleCornellSplit: () -> Unit,
+    onManualRegalFlash: () -> Unit,
+    onOpenPdfClick: () -> Unit,
+    onSelectPreset: (BooxGridPreset) -> Unit,
+    onSelectFlow: (BooxTraversalFlow) -> Unit,
+    onToggleStudioEdit: () -> Unit,
+    onToggleZoomTier: () -> Unit,
+    onTogglePanelsSpotlight: () -> Unit,
+    onTogglePanelsSpread: () -> Unit,
+    onTogglePanelsBleed: () -> Unit,
+    onToggleKaleidoBoost: () -> Unit,
+    onToggleMarginTrim: () -> Unit,
+    onResetGridSplits: () -> Unit,
+    onCycleEpubTypography: () -> Unit,
+    onToggleEpubTwoColumn: () -> Unit,
+    onCycleRefreshMode: () -> Unit,
+    onToggleHighContrast: () -> Unit,
     onStepPrev: () -> Unit,
     onStepNext: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFFFAF9F5))
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 1. TOP FLOATING NEOREADER V3 BAR
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(Color(0xF7FAF9F5))
         ) {
-            EInkActionPill(
-                label = "← Previous",
-                isSelected = false,
-                onClick = onStepPrev
-            )
-            EInkActionPill(
-                label = "Next Quadrant →",
-                isSelected = true,
-                onClick = onStepNext
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    EInkActionPill(
+                        label = "← Library",
+                        isSelected = true,
+                        onClick = onReturnToLibrary
+                    )
+
+                    Text(
+                        text = if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) state.activeEpubBook.title else state.documentTitle,
+                        color = EInkPureBlack,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.SansSerif,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+
+                    // Instant Reader Mode Switcher Pills
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        EInkActionPill(
+                            label = "NeoFlow PDF",
+                            isSelected = state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW,
+                            onClick = { onSelectWorkspaceMode(BooxWorkspaceMode.PDF_NEOFLOW) }
+                        )
+                        EInkActionPill(
+                            label = "Panels Comic",
+                            isSelected = state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS,
+                            onClick = { onSelectWorkspaceMode(BooxWorkspaceMode.PANELS_COMICS) }
+                        )
+                        EInkActionPill(
+                            label = "Kindle EPUB",
+                            isSelected = state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB,
+                            onClick = { onSelectWorkspaceMode(BooxWorkspaceMode.KINDLE_EPUB) }
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    EInkActionPill(
+                        label = if (state.showCornellSplitScratchpad) "◫ Split Notes: ON" else "◫ Split Notes",
+                        isSelected = state.showCornellSplitScratchpad,
+                        onClick = onToggleCornellSplit
+                    )
+                    EInkActionPill(
+                        label = "↻ Regal",
+                        isSelected = false,
+                        onClick = onManualRegalFlash
+                    )
+                    EInkActionPill(
+                        label = "+ Open File",
+                        isSelected = false,
+                        onClick = onOpenPdfClick
+                    )
+                    EInkActionPill(
+                        label = "Done",
+                        isSelected = false,
+                        onClick = onDismissOverlay
+                    )
+                }
+            }
+            HorizontalDivider(thickness = 1.5.dp, color = EInkPureBlack)
         }
 
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // 2. BOTTOM FLOATING NEOREADER V3 CONTROL SHEET
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color(0xF7FAF9F5))
         ) {
-            // Subtle Kindle Scribe / NeoReader Progress Bar
-            val totalSteps = max(1, state.computedBlocks.size)
-            val progressFraction = ((state.activeStepIndex + 1).toFloat() / totalSteps.toFloat()).coerceIn(0.1f, 1f)
-            Box(
-                modifier = Modifier
-                    .width(120.dp)
-                    .height(6.dp)
-                    .background(EInkBorderGray, RoundedCornerShape(50))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progressFraction)
-                        .fillMaxHeight()
-                        .background(EInkPureBlack, RoundedCornerShape(50))
+            HorizontalDivider(thickness = 1.5.dp, color = EInkPureBlack)
+
+            if (state.workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW || state.workspaceMode == BooxWorkspaceMode.PANELS_COMICS) {
+                NeoFlowControlStrip(
+                    state = state,
+                    onSelectPreset = onSelectPreset,
+                    onSelectFlow = onSelectFlow,
+                    onToggleStudioEdit = onToggleStudioEdit,
+                    onToggleZoomTier = onToggleZoomTier,
+                    onTogglePanelsSpotlight = onTogglePanelsSpotlight,
+                    onTogglePanelsSpread = onTogglePanelsSpread,
+                    onTogglePanelsBleed = onTogglePanelsBleed,
+                    onToggleKaleidoBoost = onToggleKaleidoBoost,
+                    onToggleMarginTrim = onToggleMarginTrim,
+                    onResetGridSplits = onResetGridSplits
                 )
+            } else if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Kindle Typography",
+                        color = EInkMutedText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    EInkActionPill(
+                        label = "Aa: ${state.epubTypographyPreset.label}",
+                        isSelected = false,
+                        onClick = onCycleEpubTypography
+                    )
+                    EInkActionPill(
+                        label = if (state.epubTwoColumnMode) "2-Column Book Spread" else "1-Column Kindle",
+                        isSelected = state.epubTwoColumnMode,
+                        onClick = onToggleEpubTwoColumn
+                    )
+                    EInkActionPill(
+                        label = "Refresh: ${state.refreshMode.title}",
+                        isSelected = false,
+                        onClick = onCycleRefreshMode
+                    )
+                    EInkActionPill(
+                        label = if (state.highContrastBAndW) "300 PPI B&W" else "Kaleido 3 Color",
+                        isSelected = state.highContrastBAndW,
+                        onClick = onToggleHighContrast
+                    )
+                }
             }
 
-            Text(
-                text = "Page ${state.pageIndex + 1}/${state.pageCount} · ${state.studyCards.size} Notes · ${state.currentPageStrokes.size + state.cornellStrokes.size} Strokes",
-                color = EInkMutedText,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                fontFamily = FontFamily.SansSerif
-            )
+            HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
+
+            // Bottom Scrubber & Quick Navigation Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    EInkActionPill(
+                        label = "← Prev",
+                        isSelected = false,
+                        onClick = onStepPrev
+                    )
+                    EInkActionPill(
+                        label = "Next →",
+                        isSelected = true,
+                        onClick = onStepNext
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val totalSteps = max(1, state.computedBlocks.size)
+                    val progressFraction = ((state.activeStepIndex + 1).toFloat() / totalSteps.toFloat()).coerceIn(0.1f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .width(140.dp)
+                            .height(6.dp)
+                            .background(EInkBorderGray, RoundedCornerShape(50))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(progressFraction)
+                                .fillMaxHeight()
+                                .background(EInkPureBlack, RoundedCornerShape(50))
+                        )
+                    }
+
+                    EInkActionPill(
+                        label = "✦ Binder (${state.studyCards.size})",
+                        isSelected = false,
+                        onClick = onOpenStudyBinder
+                    )
+                }
+            }
         }
     }
 }

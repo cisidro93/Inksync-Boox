@@ -320,6 +320,70 @@ fun BooxSanctuaryShelfView(
                     )
                 }
             }
+
+            // Card 3: iOS Panels-Grade Comic & Manga Studio (.CBZ / .PDF)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .background(EInkPaperWhite, RoundedCornerShape(6.dp))
+                    .border(2.5.dp, EInkPureBlack, RoundedCornerShape(6.dp))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .background(KaleidoCyanHighlight, RoundedCornerShape(4.dp))
+                            .border(1.5.dp, EInkPureBlack, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = "PANELS · COMICS & MANGA",
+                            color = EInkPureBlack,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Text(
+                        text = if (state.traversalFlow == com.example.inksyncboox.neoflow.BooxTraversalFlow.MANGA_RTL) "RTL Manga ←" else "LTR Western →",
+                        color = EInkPureBlack,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                Text(
+                    text = "Panels Comic & Manga Studio",
+                    color = EInkPureBlack,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Serif
+                )
+
+                Text(
+                    text = "Guided Panel Spotlight Dimming · Kaleido 3 Contrast LUT · 2-Page Spread (+1 Cover) · 8BitDo Remote Ready",
+                    color = EInkMutedText,
+                    fontSize = 13.sp
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SanctuaryPillButton(
+                        label = "Launch Panels Studio →",
+                        isPrimary = true,
+                        onClick = { onSelectMode(BooxWorkspaceMode.PANELS_COMICS) }
+                    )
+                    SanctuaryPillButton(
+                        label = "Import .CBZ…",
+                        isPrimary = false,
+                        onClick = onOpenLocalPdf
+                    )
+                }
+            }
         }
 
         // Boox Note Air 4C Hardware Readiness Diagnostic Strip
@@ -373,79 +437,62 @@ fun BooxKindleEpubReaderView(
     onToggleParagraphHighlight: (String, String, Int, Int) -> Unit,
     onStepPrevChapter: () -> Unit,
     onStepNextChapter: () -> Unit,
+    onToggleReaderOverlay: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val chapter = state.currentEpubChapter
     val preset = state.epubTypographyPreset
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(EInkPaperWhite)
-            .border(2.dp, EInkPureBlack)
+            .clickable(onClick = onToggleReaderOverlay)
     ) {
-        // Kindle Typography & Column Control Header
-        Row(
+        // Full-Bleed Bookerly-Style 300 PPI Reflow Page (100% Edge-to-Edge)
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(EInkSurfaceGray)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 44.dp, vertical = 32.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            // Subtle Chapter Running Header (like a real printed book / Kindle page)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "${state.activeEpubBook.title} · ${chapter.title}",
-                    color = EInkPureBlack,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Serif,
+                    text = state.activeEpubBook.title.uppercase(),
+                    color = EInkMutedText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = FontFamily.SansSerif,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "Tap any paragraph to toggle Kaleido 3 CFI Highlight (${state.activeSwatch.label}) & auto-pin to Study Hub",
+                    text = "${chapter.title} · Tap center for menu",
                     color = EInkMutedText,
                     fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = FontFamily.SansSerif
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SanctuaryPillButton(
-                    label = "Aa: ${preset.label}",
-                    isPrimary = false,
-                    onClick = onCycleTypography
-                )
-                SanctuaryPillButton(
-                    label = if (state.epubTwoColumnMode) "Layout: 2-Col Book" else "Layout: 1-Col Kindle",
-                    isPrimary = state.epubTwoColumnMode,
-                    onClick = onToggleTwoColumn
-                )
-            }
-        }
-
-        HorizontalDivider(thickness = 2.dp, color = EInkPureBlack)
-
-        // Bookerly-Style 300 PPI Reflow Body
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 28.dp, vertical = 20.dp)
-        ) {
             if (state.epubTwoColumnMode) {
                 val mid = (chapter.paragraphs.size + 1) / 2
                 val leftCol = chapter.paragraphs.take(mid)
                 val rightCol = chapter.paragraphs.drop(mid)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(28.dp)
+                    horizontalArrangement = Arrangement.spacedBy(36.dp)
                 ) {
                     Column(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         leftCol.forEach { para ->
                             EpubParagraphBlock(
@@ -466,13 +513,13 @@ fun BooxKindleEpubReaderView(
                     }
                     Box(
                         modifier = Modifier
-                            .width(1.5.dp)
+                            .width(1.dp)
                             .fillMaxHeight()
                             .background(EInkBorderGray)
                     )
                     Column(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         rightCol.forEach { para ->
                             EpubParagraphBlock(
@@ -495,7 +542,7 @@ fun BooxKindleEpubReaderView(
             } else {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
                     chapter.paragraphs.forEach { para ->
                         EpubParagraphBlock(
@@ -515,30 +562,8 @@ fun BooxKindleEpubReaderView(
                     }
                 }
             }
-        }
 
-        HorizontalDivider(thickness = 1.5.dp, color = EInkPureBlack)
-
-        // Whisper-Quiet Kindle Pace & Progress Footer (Zero Streak Pressure)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(EInkPaperWhite)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            SanctuaryPillButton(label = "◀ Prev Chapter", isPrimary = false, onClick = onStepPrevChapter)
-
-            Text(
-                text = "Chapter ${chapter.index + 1} of ${state.activeEpubBook.chapters.size} · ~${chapter.estimatedMinutes} mins left in chapter · CFI Anchors Active",
-                color = EInkPureBlack,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
-            )
-
-            SanctuaryPillButton(label = "Next Chapter ▶", isPrimary = true, onClick = onStepNextChapter)
+            Spacer(modifier = Modifier.height(28.dp))
         }
     }
 }
