@@ -1,0 +1,13 @@
+name: tmp onyx sdk probe
+on:
+  push:
+    branches: [ boox-noteair4c-reader-cleanup ]
+    paths: [ '.github/workflows/tmp-onyx-probe.yml' ]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for a in onyxsdk-device onyxsdk-pen onyxsdk-base; do
+            echo "=== $a"; curl -sSL -m 30 "http://repo.boox.com/repository/maven-public/com/onyx/android/sdk/$a/maven-metadata.xml" | head -60
+          done
