@@ -34,10 +34,10 @@ private val BooxEInkColorScheme = lightColorScheme(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun InkSyncBooxTheme(
-    highContrastBAndW: Boolean = false,
+    monochrome: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val scheme = if (highContrastBAndW) {
+    val scheme = if (monochrome) {
         BooxEInkColorScheme.copy(
             secondary = EInkPureBlack,
             secondaryContainer = EInkSurfaceGray,
@@ -47,7 +47,7 @@ fun InkSyncBooxTheme(
         BooxEInkColorScheme
     }
 
-    // Disable stretchy overscroll glow/bounce which causes severe E-Ink A2 refresh ghosting
+    // No stretch/glow overscroll: animated overscroll causes ghosting on e-ink
     CompositionLocalProvider(
         LocalOverscrollConfiguration provides null
     ) {

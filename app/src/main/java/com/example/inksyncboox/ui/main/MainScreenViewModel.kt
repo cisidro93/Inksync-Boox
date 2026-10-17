@@ -1,13 +1,19 @@
 package com.example.inksyncboox.ui.main
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.inksyncboox.data.DataRepository
-import com.example.inksyncboox.eink.BooxRefreshMode
-import com.example.inksyncboox.epub.BooxEpubSampleCatalog
+import com.example.inksyncboox.data.DocKind
+import com.example.inksyncboox.data.DocumentAnnotations
+import com.example.inksyncboox.data.ReaderSettings
+import com.example.inksyncboox.data.ReaderStore
+import com.example.inksyncboox.data.RecentDocument
+import com.example.inksyncboox.data.documentKey
 import com.example.inksyncboox.epub.EInkTypographyPreset
+import com.example.inksyncboox.epub.EpubAnchor
 import com.example.inksyncboox.epub.EpubBookDocument
 import com.example.inksyncboox.epub.EpubChapter
+import com.example.inksyncboox.epub.EpubPaging
 import com.example.inksyncboox.ink.BooxInkStroke
 import com.example.inksyncboox.ink.BooxStylusTool
 import com.example.inksyncboox.ink.NormalizedInkPoint
@@ -21,39 +27,56 @@ import com.example.inksyncboox.study.BooxWorkspaceMode
 import com.example.inksyncboox.study.CornellScratchpadTemplate
 import com.example.inksyncboox.study.UnifiedStudyCard
 import com.example.inksyncboox.theme.BooxPenSwatches
-import com.example.inksyncboox.theme.KaleidoAmberHighlight
-import com.example.inksyncboox.theme.KaleidoCyanHighlight
 import com.example.inksyncboox.theme.KaleidoInkSwatch
-import com.example.inksyncboox.theme.KaleidoMintHighlight
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.util.UUID
 import kotlin.math.hypot
 
+/** The document currently open in a reader. */
+data class OpenDocument(
+    val uri: String,
+    val title: String,
+    val kind: DocKind
+) {
+    val key: String get() = documentKey(uri)
+}
+
 data class BooxReaderState(
-    val workspaceMode: BooxWorkspaceMode = BooxWorkspaceMode.PDF_NEOFLOW,
-    val documentTitle: String = "InkSync Boox · Note Air 4C Showcase.pdf",
+    val workspaceMode: BooxWorkspaceMode = BooxWorkspaceMode.LIBRARY,
+    val document: OpenDocument? = null,
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null,
+    val settings: ReaderSettings = ReaderSettings(),
+    val recentDocuments: List<RecentDocument> = emptyList(),
+
+    // Fixed-page documents (PDF / CBZ)
     val pageIndex: Int = 0,
-    val pageCount: Int = 2,
-    val gridPreset: BooxGridPreset = BooxGridPreset.GRID_2X2,
-    val traversalFlow: BooxTraversalFlow = BooxTraversalFlow.N_FLOW,
+    val pageCount: Int = 0,
+    val gridPreset: BooxGridPreset = BooxGridPreset.GRID_1X1,
+    val traversalFlow: BooxTraversalFlow = BooxTraversalFlow.Z_FLOW,
     val activeStepIndex: Int = 0,
     val isStudioGridEditMode: Boolean = false,
     val isZoomedToTier: Boolean = false,
-    val colSplitRatios: List<Float> = listOf(0.5f),
-    val rowSplitRatios: List<Float> = listOf(0.5f),
+    val colSplitRatios: List<Float> = emptyList(),
+    val rowSplitRatios: List<Float> = emptyList(),
     val overlapRatio: Float = 0.08f,
     val customOverrides: Map<Int, NormalizedRect> = emptyMap(),
-    val refreshMode: BooxRefreshMode = BooxRefreshMode.REGAL_HD,
-    val autoRegalEveryNTurns: Int = 3,
-    val turnsSinceLastRegal: Int = 0,
-    val highContrastBAndW: Boolean = false,
+
+    // EPUB
+    val activeEpubBook: EpubBookDocument? = null,
+    val epubChapterIndex: Int = 0,
+    val epubAnchor: EpubAnchor = EpubAnchor.START,
+    /** Start of each page of the current chapter, reported by the reader after layout. */
+    val epubPageStarts: List<EpubAnchor> = emptyList(),
+
+    // Pen, highlights and notes for the open document
     val palmShieldStylusOnly: Boolean = false,
     val showCornellSplitScratchpad: Boolean = false,
     val cornellTemplate: CornellScratchpadTemplate = CornellScratchpadTemplate.CORNELL_CUE_GRID,
@@ -63,28 +86,13 @@ data class BooxReaderState(
     val strokes: List<BooxInkStroke> = emptyList(),
     val cornellStrokes: List<BooxInkStroke> = emptyList(),
     val quadHighlights: List<QuadTextHighlight> = emptyList(),
-    // Kindle EPUB Reflow State
-    val activeEpubBook: EpubBookDocument = BooxEpubSampleCatalog.deepWorkOnEInkBook,
-    val epubChapterIndex: Int = 0,
-    val epubTypographyPreset: EInkTypographyPreset = EInkTypographyPreset.KINDLE_CLASSIC,
-    val epubTwoColumnMode: Boolean = false,
-    val epubHighlightedCfis: Map<String, KaleidoInkSwatch> = mapOf(
-        "ch1_p3" to BooxPenSwatches.first { it.id == "amber_hl" },
-        "ch2_p3" to BooxPenSwatches.first { it.id == "cyan_hl" }
-    ),
-    val epubMarginStrokesByCfi: Map<String, List<BooxInkStroke>> = emptyMap(),
-    val showWelcomeBackContextBanner: Boolean = true,
-    // Unified Study Hub Cards
-    val studyCards: List<UnifiedStudyCard> = defaultSampleStudyCards(),
-    val lastSidecarExportStatus: String = "Auto-Sidecar Ready (.inksync.json + .md)",
+    val epubHighlightedCfis: Map<String, KaleidoInkSwatch> = emptyMap(),
+    val studyCards: List<UnifiedStudyCard> = emptyList(),
+
+    val lastExportStatus: String? = null,
+    /** Incremented whenever the screen should get a full e-ink flash. */
     val regalFlashTick: Int = 0,
-    val lastStylusTelemetry: String = "Wacom EMR Ready · 4096 Levels",
-    // iOS Panels-inspired Comic & Manga Studio State + Kaleido 3 Optical Enhancements
-    val panelsSpotlightDimming: Boolean = true,
-    val panelsDoublePageSpread: Boolean = false,
-    val panelsDarkGutterBleed: Boolean = true,
-    val kaleidoOpticalBoost: Boolean = true,
-    val autoTrimMargins: Boolean = false
+    val turnsSinceLastRegal: Int = 0
 ) {
     val computedBlocks: List<BooxSectionBlock>
         get() = NeoFlowEngine.computeBlocks(
@@ -99,9 +107,7 @@ data class BooxReaderState(
     val currentBlock: BooxSectionBlock
         get() {
             val blocks = computedBlocks
-            return blocks.getOrElse(activeStepIndex.coerceIn(0, (blocks.size - 1).coerceAtLeast(0))) {
-                blocks.first()
-            }
+            return blocks[activeStepIndex.coerceIn(0, blocks.lastIndex)]
         }
 
     val currentPageStrokes: List<BooxInkStroke>
@@ -110,237 +116,374 @@ data class BooxReaderState(
     val currentPageQuadHighlights: List<QuadTextHighlight>
         get() = quadHighlights.filter { it.pageIndex == pageIndex }
 
-    val currentEpubChapter: EpubChapter
-        get() = activeEpubBook.chapters.getOrElse(
-            epubChapterIndex.coerceIn(0, activeEpubBook.chapters.lastIndex)
-        ) { activeEpubBook.chapters.first() }
+    val currentEpubChapter: EpubChapter?
+        get() = activeEpubBook?.chapters?.getOrNull(epubChapterIndex)
+
+    val epubPageIndex: Int
+        get() = EpubPaging.pageIndexFor(epubPageStarts, epubAnchor)
+
+    val isReaderMode: Boolean
+        get() = workspaceMode == BooxWorkspaceMode.PDF_NEOFLOW ||
+            workspaceMode == BooxWorkspaceMode.PANELS_COMICS ||
+            workspaceMode == BooxWorkspaceMode.KINDLE_EPUB
+
+    /** The reader that matches the open document, or null when nothing is open. */
+    val readerModeForDocument: BooxWorkspaceMode?
+        get() = when (document?.kind) {
+            DocKind.EPUB -> BooxWorkspaceMode.KINDLE_EPUB
+            DocKind.CBZ -> BooxWorkspaceMode.PANELS_COMICS
+            DocKind.PDF -> if (workspaceMode == BooxWorkspaceMode.PANELS_COMICS) {
+                BooxWorkspaceMode.PANELS_COMICS
+            } else {
+                BooxWorkspaceMode.PDF_NEOFLOW
+            }
+            null -> null
+        }
 }
 
-private fun defaultSampleStudyCards(): List<UnifiedStudyCard> = listOf(
-    UnifiedStudyCard(
-        id = "seed_card_1",
-        sourceType = "EPUB",
-        documentTitle = "The Sanctuary of Slow Reading",
-        locatorBadge = "Ch 1 · ¶3 (ch1_p3)",
-        pageOrChapterIndex = 0,
-        tierOrParagraphIndex = 2,
-        quoteText = "Once a page is set via a Regal waveform pass, zero power is consumed and only ambient room light reflects back to your eye.",
-        reflectionCue = "Reflective Carta 1200 layer eliminates 120Hz OLED photonic fatigue.",
-        swatchId = "amber_hl",
-        colorHex = KaleidoAmberHighlight.value.toLong(),
-        timestampLabel = "Saved in Sanctuary"
-    ),
-    UnifiedStudyCard(
-        id = "seed_card_2",
-        sourceType = "PDF",
-        documentTitle = "InkSync Boox · Note Air 4C Showcase.pdf",
-        locatorBadge = "Page 1 · Tier 1/4 · R1C1",
-        pageOrChapterIndex = 0,
-        tierOrParagraphIndex = 0,
-        quoteText = "NeoFlow Smart Tiers partition any 2-column academic page into an M×N matrix with 8% Connection Redundancy so lines at boundaries are never clipped.",
-        reflectionCue = "Zero horizontal pan in portrait = zero A2 ghosting.",
-        swatchId = "mint_hl",
-        colorHex = KaleidoMintHighlight.value.toLong(),
-        timestampLabel = "Saved in Sanctuary"
-    ),
-    UnifiedStudyCard(
-        id = "seed_card_3",
-        sourceType = "EPUB",
-        documentTitle = "The Sanctuary of Slow Reading",
-        locatorBadge = "Ch 2 · ¶3 (ch2_p3)",
-        pageOrChapterIndex = 1,
-        tierOrParagraphIndex = 2,
-        quoteText = "By anchoring Wacom EMR vector strokes and Cornell scratchpad cards directly to canonical paragraph identifiers (CFI), InkSync Boox restores marginalia.",
-        reflectionCue = "CFI anchors keep handwritten notes aligned across font size changes.",
-        swatchId = "cyan_hl",
-        colorHex = KaleidoCyanHighlight.value.toLong(),
-        timestampLabel = "Saved in Sanctuary"
+@OptIn(ExperimentalCoroutinesApi::class)
+class MainScreenViewModel(
+    private val store: ReaderStore,
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val clock: () -> Long = System::currentTimeMillis
+) : ViewModel() {
+
+    // Single-threaded so writes to the same file never race.
+    private val writeDispatcher = ioDispatcher.limitedParallelism(1)
+
+    private val _readerState = MutableStateFlow(
+        BooxReaderState(
+            settings = store.loadSettings(),
+            recentDocuments = store.loadRecents().sortedByDescending { it.lastOpenedMillis }
+        )
     )
-)
-
-class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
-
-    val uiState: StateFlow<MainScreenUiState> =
-        dataRepository.data
-            .map<List<String>, MainScreenUiState>(MainScreenUiState::Success)
-            .catch { emit(MainScreenUiState.Error(it)) }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MainScreenUiState.Loading)
-
-    private val _readerState = MutableStateFlow(BooxReaderState())
     val readerState: StateFlow<BooxReaderState> = _readerState.asStateFlow()
 
-    private val _incomingFileUri = MutableStateFlow<android.net.Uri?>(null)
-    val incomingFileUri: StateFlow<android.net.Uri?> = _incomingFileUri.asStateFlow()
+    private val _pendingOpenUri = MutableStateFlow<Uri?>(null)
+    /** A document the UI should open (from the picker, an intent, or the library). */
+    val pendingOpenUri: StateFlow<Uri?> = _pendingOpenUri.asStateFlow()
 
-    fun setIncomingFileUri(uri: android.net.Uri?) {
-        _incomingFileUri.value = uri
+    // ---------------------------------------------------------------------------------------
+    // Opening documents
+    // ---------------------------------------------------------------------------------------
+
+    fun requestOpen(uri: Uri) {
+        _pendingOpenUri.value = uri
     }
+
+    /** Clears [uri] once it has been handled, unless a newer request replaced it meanwhile. */
+    fun consumeOpenRequest(uri: Uri) {
+        _pendingOpenUri.compareAndSet(uri, null)
+    }
+
+    /** Re-opens the most recent document on a cold start with no incoming file. */
+    fun restoreLastDocumentIfIdle(parse: (String) -> Uri) {
+        val state = _readerState.value
+        if (state.document != null || _pendingOpenUri.value != null) return
+        val last = state.recentDocuments.firstOrNull() ?: return
+        _pendingOpenUri.value = parse(last.uri)
+    }
+
+    fun onOpenStarted() {
+        _readerState.update { it.copy(isLoading = true, errorMessage = null) }
+    }
+
+    fun onOpenFailed(message: String) {
+        _readerState.update {
+            it.copy(
+                isLoading = false,
+                errorMessage = message,
+                workspaceMode = if (it.document == null) BooxWorkspaceMode.LIBRARY else it.workspaceMode
+            )
+        }
+    }
+
+    fun dismissError() {
+        _readerState.update { it.copy(errorMessage = null) }
+    }
+
+    fun onFixedDocumentOpened(uri: String, title: String, kind: DocKind, pageCount: Int) {
+        val doc = OpenDocument(uri, title, kind)
+        val saved = recentFor(uri)
+        val annotations = store.loadAnnotations(doc.key)
+        _readerState.update { state ->
+            state.withAnnotations(annotations).copy(
+                document = doc,
+                isLoading = false,
+                errorMessage = null,
+                workspaceMode = if (kind == DocKind.CBZ) BooxWorkspaceMode.PANELS_COMICS else BooxWorkspaceMode.PDF_NEOFLOW,
+                pageCount = pageCount.coerceAtLeast(1),
+                pageIndex = (saved?.pageIndex ?: 0).coerceIn(0, (pageCount - 1).coerceAtLeast(0)),
+                activeStepIndex = 0,
+                activeEpubBook = null,
+                epubPageStarts = emptyList(),
+                isStudioGridEditMode = false,
+                regalFlashTick = state.regalFlashTick + 1,
+                turnsSinceLastRegal = 0
+            )
+        }
+        touchRecent()
+    }
+
+    fun onEpubOpened(uri: String, book: EpubBookDocument) {
+        val doc = OpenDocument(uri, book.title, DocKind.EPUB)
+        val saved = recentFor(uri)
+        val annotations = store.loadAnnotations(doc.key)
+        val chapter = (saved?.epubChapter ?: 0).coerceIn(0, book.chapters.lastIndex)
+        _readerState.update { state ->
+            state.withAnnotations(annotations).copy(
+                document = doc,
+                isLoading = false,
+                errorMessage = null,
+                workspaceMode = BooxWorkspaceMode.KINDLE_EPUB,
+                activeEpubBook = book,
+                epubChapterIndex = chapter,
+                epubAnchor = if (saved != null) EpubAnchor(saved.epubParagraph, saved.epubOffset) else EpubAnchor.START,
+                epubPageStarts = emptyList(),
+                pageIndex = 0,
+                pageCount = 0,
+                regalFlashTick = state.regalFlashTick + 1,
+                turnsSinceLastRegal = 0
+            )
+        }
+        touchRecent()
+    }
+
+    private fun BooxReaderState.withAnnotations(a: DocumentAnnotations): BooxReaderState = copy(
+        strokes = a.strokes,
+        cornellStrokes = a.notesStrokes,
+        quadHighlights = a.quadHighlights,
+        epubHighlightedCfis = a.epubHighlights.mapNotNull { (cfi, swatchId) ->
+            BooxPenSwatches.firstOrNull { it.id == swatchId }?.let { cfi to it }
+        }.toMap(),
+        studyCards = a.studyCards
+    )
+
+    private fun recentFor(uri: String): RecentDocument? =
+        _readerState.value.recentDocuments.firstOrNull { it.uri == uri }
+
+    /** Records the current document and position at the top of the recent list. */
+    private fun touchRecent() {
+        val state = _readerState.value
+        val doc = state.document ?: return
+        val anchor = state.epubAnchor.takeIf { it != EpubAnchor.END }
+            ?: state.epubPageStarts.lastOrNull() ?: EpubAnchor.START
+        val entry = RecentDocument(
+            uri = doc.uri,
+            title = doc.title,
+            kind = doc.kind,
+            lastOpenedMillis = clock(),
+            pageIndex = state.pageIndex,
+            pageCount = state.pageCount,
+            epubChapter = state.epubChapterIndex,
+            epubParagraph = anchor.paragraph,
+            epubOffset = anchor.offset,
+            epubChapterCount = state.activeEpubBook?.chapters?.size ?: 0
+        )
+        val updated = (listOf(entry) + state.recentDocuments.filterNot { it.uri == doc.uri }).take(MAX_RECENTS)
+        _readerState.update { it.copy(recentDocuments = updated) }
+        viewModelScope.launch(writeDispatcher) { store.saveRecents(updated) }
+    }
+
+    fun removeRecent(uri: String) {
+        val updated = _readerState.value.recentDocuments.filterNot { it.uri == uri }
+        _readerState.update { it.copy(recentDocuments = updated) }
+        viewModelScope.launch(writeDispatcher) { store.saveRecents(updated) }
+    }
+
+    private fun persistAnnotations() {
+        val state = _readerState.value
+        val key = state.document?.key ?: return
+        val snapshot = DocumentAnnotations(
+            strokes = state.strokes,
+            notesStrokes = state.cornellStrokes,
+            quadHighlights = state.quadHighlights,
+            epubHighlights = state.epubHighlightedCfis.mapValues { it.value.id },
+            studyCards = state.studyCards
+        )
+        viewModelScope.launch(writeDispatcher) { store.saveAnnotations(key, snapshot) }
+    }
+
+    private fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) {
+        _readerState.update { it.copy(settings = transform(it.settings)) }
+        val settings = _readerState.value.settings
+        viewModelScope.launch(writeDispatcher) { store.saveSettings(settings) }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Screens
+    // ---------------------------------------------------------------------------------------
 
     fun selectWorkspaceMode(mode: BooxWorkspaceMode) {
         _readerState.update { state ->
+            val target = when (mode) {
+                BooxWorkspaceMode.KINDLE_EPUB ->
+                    if (state.document?.kind == DocKind.EPUB) mode else state.readerModeForDocument
+                BooxWorkspaceMode.PDF_NEOFLOW, BooxWorkspaceMode.PANELS_COMICS ->
+                    when (state.document?.kind) {
+                        DocKind.PDF -> mode
+                        DocKind.CBZ -> BooxWorkspaceMode.PANELS_COMICS
+                        else -> state.readerModeForDocument
+                    }
+                else -> mode
+            } ?: BooxWorkspaceMode.LIBRARY
+            state.copy(workspaceMode = target, regalFlashTick = state.regalFlashTick + 1)
+        }
+    }
+
+    /** Leaves the library or highlights list and returns to the open document, if any. */
+    fun returnToReader() {
+        _readerState.update { state ->
             state.copy(
-                workspaceMode = mode,
+                workspaceMode = state.readerModeForDocument ?: BooxWorkspaceMode.LIBRARY,
                 regalFlashTick = state.regalFlashTick + 1
             )
         }
     }
 
-    fun dismissWelcomeBackBanner() {
-        _readerState.update { it.copy(showWelcomeBackContextBanner = false) }
+    fun requestFullRefresh() {
+        _readerState.update { it.copy(regalFlashTick = it.regalFlashTick + 1, turnsSinceLastRegal = 0) }
     }
 
-    fun togglePalmShieldStylusOnly() {
-        _readerState.update { state ->
-            val enabled = !state.palmShieldStylusOnly
-            state.copy(
-                palmShieldStylusOnly = enabled,
-                lastStylusTelemetry = if (enabled) {
-                    "Palm Shield ACTIVE · Finger Page Turns Locked"
-                } else {
-                    "Palm Shield OFF · Finger + Stylus Active"
-                }
-            )
+    /** Counts a page turn and flashes the screen every N turns, per the user's setting. */
+    private fun BooxReaderState.afterPageTurn(): BooxReaderState {
+        val every = settings.fullRefreshEveryNTurns
+        if (every <= 0) return copy(turnsSinceLastRegal = 0)
+        val turns = turnsSinceLastRegal + 1
+        return if (turns >= every) {
+            copy(turnsSinceLastRegal = 0, regalFlashTick = regalFlashTick + 1)
+        } else {
+            copy(turnsSinceLastRegal = turns)
         }
     }
 
-    fun toggleCornellSplitScratchpad() {
+    // ---------------------------------------------------------------------------------------
+    // Page turning
+    // ---------------------------------------------------------------------------------------
+
+    fun stepForwardTierOrPage() {
+        val before = _readerState.value
         _readerState.update { state ->
-            state.copy(
-                showCornellSplitScratchpad = !state.showCornellSplitScratchpad,
-                regalFlashTick = state.regalFlashTick + 1
-            )
+            if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) {
+                return@update state.stepEpub(forward = true)
+            }
+            if (state.pageCount <= 0) return@update state
+            val totalBlocks = state.computedBlocks.size
+            when {
+                state.activeStepIndex + 1 < totalBlocks ->
+                    state.copy(activeStepIndex = state.activeStepIndex + 1).afterPageTurn()
+                state.pageIndex + 1 < state.pageCount ->
+                    state.copy(pageIndex = state.pageIndex + 1, activeStepIndex = 0).afterPageTurn()
+                else -> state
+            }
+        }
+        onPositionChanged(before)
+    }
+
+    fun stepBackwardTierOrPage() {
+        val before = _readerState.value
+        _readerState.update { state ->
+            if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) {
+                return@update state.stepEpub(forward = false)
+            }
+            if (state.pageCount <= 0) return@update state
+            when {
+                state.activeStepIndex > 0 ->
+                    state.copy(activeStepIndex = state.activeStepIndex - 1).afterPageTurn()
+                state.pageIndex > 0 -> state.copy(
+                    pageIndex = state.pageIndex - 1,
+                    activeStepIndex = (state.computedBlocks.size - 1).coerceAtLeast(0)
+                ).afterPageTurn()
+                else -> state
+            }
+        }
+        onPositionChanged(before)
+    }
+
+    private fun BooxReaderState.stepEpub(forward: Boolean): BooxReaderState {
+        val book = activeEpubBook ?: return this
+        val step = if (forward) {
+            EpubPaging.next(epubPageStarts, epubAnchor, epubChapterIndex, book.chapters.size)
+        } else {
+            EpubPaging.previous(epubPageStarts, epubAnchor, epubChapterIndex)
+        }
+        return when (step) {
+            is EpubPaging.Step.SamePage -> copy(epubAnchor = step.anchor).afterPageTurn()
+            is EpubPaging.Step.OtherChapter -> copy(
+                epubChapterIndex = step.chapter,
+                epubAnchor = step.anchor,
+                epubPageStarts = emptyList()
+            ).afterPageTurn()
+            EpubPaging.Step.None -> this
         }
     }
 
-    fun cycleCornellTemplate() {
-        _readerState.update { state ->
-            val templates = CornellScratchpadTemplate.entries
-            val next = templates[(templates.indexOf(state.cornellTemplate) + 1) % templates.size]
-            state.copy(cornellTemplate = next)
+    private fun onPositionChanged(before: BooxReaderState) {
+        val after = _readerState.value
+        if (after.pageIndex != before.pageIndex ||
+            after.epubChapterIndex != before.epubChapterIndex ||
+            after.epubAnchor != before.epubAnchor
+        ) {
+            touchRecent()
         }
     }
 
-    fun commitCornellScratchpadStroke(points: List<NormalizedInkPoint>, telemetry: String) {
-        if (points.size < 2) return
+    fun goToPage(index: Int) {
+        val before = _readerState.value
         _readerState.update { state ->
-            val isHl = state.activeStylusTool == BooxStylusTool.KALEIDO_HIGHLIGHTER || state.activeSwatch.isHighlighter
-            val stroke = BooxInkStroke(
-                id = UUID.randomUUID().toString(),
-                pageIndex = state.pageIndex,
-                points = points,
-                colorHex = state.activeSwatch.color.value.toLong(),
-                baseWidthPt = if (isHl) 16f else state.strokeWidthPt,
-                isHighlighter = isHl
-            )
+            if (state.pageCount <= 0) return@update state
             state.copy(
-                cornellStrokes = state.cornellStrokes + stroke,
-                lastStylusTelemetry = telemetry
-            )
-        }
-    }
-
-    fun clearCornellScratchpad() {
-        _readerState.update { state ->
-            state.copy(
-                cornellStrokes = emptyList(),
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
-    }
-
-    fun updateDocumentMetadata(title: String, pageCount: Int, isCbz: Boolean = false) {
-        _readerState.update { state ->
-            state.copy(
-                workspaceMode = if (isCbz) BooxWorkspaceMode.PANELS_COMICS else BooxWorkspaceMode.PDF_NEOFLOW,
-                documentTitle = title,
-                pageCount = pageCount.coerceAtLeast(1),
-                pageIndex = 0,
+                pageIndex = index.coerceIn(0, state.pageCount - 1),
                 activeStepIndex = 0,
-                traversalFlow = if (isCbz) BooxTraversalFlow.REVERSE_Z else state.traversalFlow,
-                lastStylusTelemetry = if (isCbz) {
-                    "Panels Studio · $title ($pageCount pages) · Guided Spotlight RTL"
-                } else {
-                    "Loaded Real .PDF ($pageCount pages) · NeoFlow Matrix Ready"
-                }
-            )
-        }
-    }
-
-    fun togglePanelsSpotlightDimming() {
-        _readerState.update { state ->
-            state.copy(panelsSpotlightDimming = !state.panelsSpotlightDimming)
-        }
-    }
-
-    fun togglePanelsDoublePageSpread() {
-        _readerState.update { state ->
-            state.copy(
-                panelsDoublePageSpread = !state.panelsDoublePageSpread,
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
-    }
-
-    fun togglePanelsDarkGutterBleed() {
-        _readerState.update { state ->
-            state.copy(panelsDarkGutterBleed = !state.panelsDarkGutterBleed)
-        }
-    }
-
-    fun toggleKaleidoOpticalBoost() {
-        _readerState.update { state ->
-            val enabled = !state.kaleidoOpticalBoost
-            state.copy(
-                kaleidoOpticalBoost = enabled,
                 regalFlashTick = state.regalFlashTick + 1,
-                lastStylusTelemetry = if (enabled) {
-                    "Kaleido 3 Optical LUT ON · White-Point Clip + Shadow Lift"
-                } else {
-                    "Kaleido 3 Optical LUT OFF · Native Gamma"
-                }
+                turnsSinceLastRegal = 0
             )
         }
+        onPositionChanged(before)
     }
 
-    fun toggleAutoTrimMargins() {
+    fun goToEpubChapter(index: Int) {
+        val before = _readerState.value
         _readerState.update { state ->
-            val enabled = !state.autoTrimMargins
+            val book = state.activeEpubBook ?: return@update state
             state.copy(
-                autoTrimMargins = enabled,
+                epubChapterIndex = index.coerceIn(0, book.chapters.lastIndex),
+                epubAnchor = EpubAnchor.START,
+                epubPageStarts = emptyList(),
                 regalFlashTick = state.regalFlashTick + 1,
-                lastStylusTelemetry = if (enabled) {
-                    "Auto-Margin Trim ON (6.5% Border Crop)"
-                } else {
-                    "Auto-Margin Trim OFF (Full Bleed)"
-                }
+                turnsSinceLastRegal = 0
             )
         }
+        onPositionChanged(before)
     }
 
-    fun loadImportedEpubBook(book: EpubBookDocument) {
+    /**
+     * Called by the EPUB reader after it lays out [chapter]. Snaps the reading position to the
+     * start of the page that contains it, so changing font size keeps you in roughly the same place.
+     */
+    fun onEpubPagesComputed(chapter: Int, pageStarts: List<EpubAnchor>) {
+        if (pageStarts.isEmpty()) return
         _readerState.update { state ->
-            state.copy(
-                workspaceMode = BooxWorkspaceMode.KINDLE_EPUB,
-                activeEpubBook = book,
-                epubChapterIndex = 0,
-                regalFlashTick = state.regalFlashTick + 1,
-                lastStylusTelemetry = "Loaded Real .EPUB (${book.chapters.size} chapters) · 300 PPI Reflow"
-            )
+            if (state.epubChapterIndex != chapter) return@update state
+            val idx = EpubPaging.pageIndexFor(pageStarts, state.epubAnchor)
+            state.copy(epubPageStarts = pageStarts, epubAnchor = pageStarts[idx])
         }
+        touchRecent()
     }
+
+    // ---------------------------------------------------------------------------------------
+    // NeoFlow tiers and panels
+    // ---------------------------------------------------------------------------------------
+
+    private fun defaultSplits(count: Int): List<Float> =
+        if (count <= 1) emptyList() else List(count - 1) { i -> (i + 1).toFloat() / count }
 
     fun selectGridPreset(preset: BooxGridPreset) {
-        val defaultColSplits = if (preset.columns <= 1) emptyList() else List(preset.columns - 1) { i ->
-            (i + 1).toFloat() / preset.columns.toFloat()
-        }
-        val defaultRowSplits = if (preset.rows <= 1) emptyList() else List(preset.rows - 1) { i ->
-            (i + 1).toFloat() / preset.rows.toFloat()
-        }
         _readerState.update { state ->
             state.copy(
                 gridPreset = preset,
-                colSplitRatios = defaultColSplits,
-                rowSplitRatios = defaultRowSplits,
+                colSplitRatios = defaultSplits(preset.columns),
+                rowSplitRatios = defaultSplits(preset.rows),
                 activeStepIndex = 0,
                 customOverrides = emptyMap(),
                 isZoomedToTier = preset != BooxGridPreset.GRID_1X1,
@@ -351,21 +494,17 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
 
     fun selectTraversalFlow(flow: BooxTraversalFlow) {
         _readerState.update { state ->
-            state.copy(
-                traversalFlow = flow,
-                activeStepIndex = 0,
-                regalFlashTick = state.regalFlashTick + 1
-            )
+            state.copy(traversalFlow = flow, activeStepIndex = 0, regalFlashTick = state.regalFlashTick + 1)
         }
     }
 
     fun toggleStudioGridEditMode() {
         _readerState.update { state ->
-            val enteringStudio = !state.isStudioGridEditMode
+            val entering = !state.isStudioGridEditMode
             state.copy(
-                isStudioGridEditMode = enteringStudio,
-                isZoomedToTier = if (enteringStudio) false else state.isZoomedToTier,
-                refreshMode = if (enteringStudio) BooxRefreshMode.FAST_SPEED else BooxRefreshMode.REGAL_HD
+                isStudioGridEditMode = entering,
+                isZoomedToTier = if (entering) false else state.isZoomedToTier,
+                regalFlashTick = if (entering) state.regalFlashTick else state.regalFlashTick + 1
             )
         }
     }
@@ -380,72 +519,11 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
         }
     }
 
-    fun stepForwardTierOrPage() {
-        _readerState.update { state ->
-            if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) {
-                val maxCh = state.activeEpubBook.chapters.lastIndex
-                val nextCh = (state.epubChapterIndex + 1).coerceAtMost(maxCh)
-                return@update state.copy(
-                    epubChapterIndex = nextCh,
-                    regalFlashTick = state.regalFlashTick + 1
-                )
-            }
-            val totalBlocks = state.computedBlocks.size
-            val nextTurns = state.turnsSinceLastRegal + 1
-            val shouldFlash = nextTurns >= state.autoRegalEveryNTurns
-            if (state.activeStepIndex + 1 < totalBlocks) {
-                state.copy(
-                    activeStepIndex = state.activeStepIndex + 1,
-                    turnsSinceLastRegal = if (shouldFlash) 0 else nextTurns,
-                    regalFlashTick = if (shouldFlash) state.regalFlashTick + 1 else state.regalFlashTick
-                )
-            } else if (state.pageIndex + 1 < state.pageCount) {
-                state.copy(
-                    pageIndex = state.pageIndex + 1,
-                    activeStepIndex = 0,
-                    turnsSinceLastRegal = 0,
-                    regalFlashTick = state.regalFlashTick + 1
-                )
-            } else {
-                state
-            }
-        }
-    }
-
-    fun stepBackwardTierOrPage() {
-        _readerState.update { state ->
-            if (state.workspaceMode == BooxWorkspaceMode.KINDLE_EPUB) {
-                val prevCh = (state.epubChapterIndex - 1).coerceAtLeast(0)
-                return@update state.copy(
-                    epubChapterIndex = prevCh,
-                    regalFlashTick = state.regalFlashTick + 1
-                )
-            }
-            if (state.activeStepIndex > 0) {
-                state.copy(
-                    activeStepIndex = state.activeStepIndex - 1,
-                    regalFlashTick = state.regalFlashTick + 1
-                )
-            } else if (state.pageIndex > 0) {
-                val prevPage = state.pageIndex - 1
-                val lastBlockIndex = (state.computedBlocks.size - 1).coerceAtLeast(0)
-                state.copy(
-                    pageIndex = prevPage,
-                    activeStepIndex = lastBlockIndex,
-                    regalFlashTick = state.regalFlashTick + 1
-                )
-            } else {
-                state
-            }
-        }
-    }
-
     fun selectBlockStep(stepIndex: Int, zoomImmediately: Boolean = false) {
         _readerState.update { state ->
-            val clamped = stepIndex.coerceIn(0, (state.computedBlocks.size - 1).coerceAtLeast(0))
             state.copy(
-                activeStepIndex = clamped,
-                isZoomedToTier = if (zoomImmediately) true else state.isZoomedToTier,
+                activeStepIndex = stepIndex.coerceIn(0, (state.computedBlocks.size - 1).coerceAtLeast(0)),
+                isZoomedToTier = zoomImmediately || state.isZoomedToTier,
                 regalFlashTick = state.regalFlashTick + 1
             )
         }
@@ -454,9 +532,7 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
     fun updateColSplitRatio(index: Int, newRatio: Float) {
         _readerState.update { state ->
             val updated = state.colSplitRatios.toMutableList()
-            if (index in updated.indices) {
-                updated[index] = newRatio.coerceIn(0.15f, 0.85f)
-            }
+            if (index in updated.indices) updated[index] = newRatio.coerceIn(0.15f, 0.85f)
             state.copy(colSplitRatios = updated)
         }
     }
@@ -464,285 +540,310 @@ class MainScreenViewModel(dataRepository: DataRepository) : ViewModel() {
     fun updateRowSplitRatio(index: Int, newRatio: Float) {
         _readerState.update { state ->
             val updated = state.rowSplitRatios.toMutableList()
-            if (index in updated.indices) {
-                updated[index] = newRatio.coerceIn(0.15f, 0.85f)
-            }
+            if (index in updated.indices) updated[index] = newRatio.coerceIn(0.15f, 0.85f)
             state.copy(rowSplitRatios = updated)
         }
     }
 
     fun resetGridSplitsAndOverrides() {
         _readerState.update { state ->
-            val preset = state.gridPreset
-            val defaultCols = if (preset.columns <= 1) emptyList() else List(preset.columns - 1) { i ->
-                (i + 1).toFloat() / preset.columns.toFloat()
-            }
-            val defaultRows = if (preset.rows <= 1) emptyList() else List(preset.rows - 1) { i ->
-                (i + 1).toFloat() / preset.rows.toFloat()
-            }
             state.copy(
-                colSplitRatios = defaultCols,
-                rowSplitRatios = defaultRows,
+                colSplitRatios = defaultSplits(state.gridPreset.columns),
+                rowSplitRatios = defaultSplits(state.gridPreset.rows),
                 customOverrides = emptyMap(),
                 regalFlashTick = state.regalFlashTick + 1
             )
         }
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Settings
+    // ---------------------------------------------------------------------------------------
+
+    fun cycleEpubTypographyPreset() = updateSettings { s ->
+        val presets = EInkTypographyPreset.entries
+        s.copy(typography = presets[(presets.indexOf(s.typography) + 1) % presets.size])
+    }
+
+    fun selectEpubTypographyPreset(preset: EInkTypographyPreset) = updateSettings { it.copy(typography = preset) }
+
+    fun toggleEpubTwoColumnMode() = updateSettings { it.copy(epubTwoColumn = !it.epubTwoColumn) }
+
+    fun setFullRefreshInterval(turns: Int) = updateSettings { it.copy(fullRefreshEveryNTurns = turns.coerceAtLeast(0)) }
+
+    fun toggleContrastBoost() = updateSettings { it.copy(contrastBoost = !it.contrastBoost) }
+
+    fun toggleTrimMargins() = updateSettings { it.copy(trimMargins = !it.trimMargins) }
+
+    fun togglePanelSpotlight() = updateSettings { it.copy(panelSpotlight = !it.panelSpotlight) }
+
+    fun toggleDarkGutter() = updateSettings { it.copy(darkGutter = !it.darkGutter) }
+
+    /** Switches page turning direction (manga) and mirrors the panel order to match. */
+    fun toggleRightToLeft() {
+        updateSettings { it.copy(rightToLeft = !it.rightToLeft) }
+        _readerState.update { state ->
+            val rtl = state.settings.rightToLeft
+            val flow = when (state.traversalFlow) {
+                BooxTraversalFlow.Z_FLOW -> if (rtl) BooxTraversalFlow.REVERSE_Z else BooxTraversalFlow.Z_FLOW
+                BooxTraversalFlow.REVERSE_Z -> if (rtl) BooxTraversalFlow.REVERSE_Z else BooxTraversalFlow.Z_FLOW
+                BooxTraversalFlow.N_FLOW -> if (rtl) BooxTraversalFlow.REVERSE_N else BooxTraversalFlow.N_FLOW
+                BooxTraversalFlow.REVERSE_N -> if (rtl) BooxTraversalFlow.REVERSE_N else BooxTraversalFlow.N_FLOW
+            }
+            state.copy(traversalFlow = flow, activeStepIndex = 0)
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Pen, highlights and notes
+    // ---------------------------------------------------------------------------------------
+
+    fun togglePalmShieldStylusOnly() {
+        _readerState.update { it.copy(palmShieldStylusOnly = !it.palmShieldStylusOnly) }
+    }
+
+    fun toggleCornellSplitScratchpad() {
+        _readerState.update { state ->
+            state.copy(
+                showCornellSplitScratchpad = !state.showCornellSplitScratchpad,
+                regalFlashTick = state.regalFlashTick + 1
+            )
+        }
+    }
+
+    fun cycleCornellTemplate() {
+        _readerState.update { state ->
+            val templates = CornellScratchpadTemplate.entries
+            state.copy(cornellTemplate = templates[(templates.indexOf(state.cornellTemplate) + 1) % templates.size])
+        }
+    }
+
+    fun commitCornellScratchpadStroke(points: List<NormalizedInkPoint>) {
+        if (points.size < 2) return
+        _readerState.update { state ->
+            val isHl = state.activeSwatch.isHighlighter
+            state.copy(
+                cornellStrokes = state.cornellStrokes + BooxInkStroke(
+                    id = UUID.randomUUID().toString(),
+                    pageIndex = 0,
+                    points = points,
+                    colorHex = state.activeSwatch.color.value.toLong(),
+                    baseWidthPt = if (isHl) 16f else state.strokeWidthPt,
+                    isHighlighter = isHl
+                )
+            )
+        }
+        persistAnnotations()
+    }
+
+    fun clearCornellScratchpad() {
+        _readerState.update { it.copy(cornellStrokes = emptyList(), regalFlashTick = it.regalFlashTick + 1) }
+        persistAnnotations()
+    }
+
     fun selectStylusTool(tool: BooxStylusTool) {
         _readerState.update { state ->
-            val targetSwatch = when (tool) {
-                BooxStylusTool.KALEIDO_HIGHLIGHTER, BooxStylusTool.QUAD_HIGHLIGHT -> {
-                    if (state.activeSwatch.isHighlighter) state.activeSwatch
-                    else BooxPenSwatches.first { it.isHighlighter }
-                }
-                BooxStylusTool.FOUNTAIN_PEN -> {
-                    if (!state.activeSwatch.isHighlighter) state.activeSwatch
-                    else BooxPenSwatches.first { !it.isHighlighter }
-                }
+            val swatch = when (tool) {
+                BooxStylusTool.KALEIDO_HIGHLIGHTER, BooxStylusTool.QUAD_HIGHLIGHT ->
+                    if (state.activeSwatch.isHighlighter) state.activeSwatch else BooxPenSwatches.first { it.isHighlighter }
+                BooxStylusTool.FOUNTAIN_PEN ->
+                    if (!state.activeSwatch.isHighlighter) state.activeSwatch else BooxPenSwatches.first { !it.isHighlighter }
                 else -> state.activeSwatch
             }
-            state.copy(
-                activeStylusTool = tool,
-                activeSwatch = targetSwatch,
-                refreshMode = if (tool == BooxStylusTool.FOUNTAIN_PEN || tool == BooxStylusTool.KALEIDO_HIGHLIGHTER) {
-                    BooxRefreshMode.A2_ULTRA
-                } else {
-                    BooxRefreshMode.REGAL_HD
-                }
-            )
+            state.copy(activeStylusTool = tool, activeSwatch = swatch)
         }
     }
 
     fun selectInkSwatch(swatch: KaleidoInkSwatch) {
         _readerState.update { state ->
-            val nextTool = if (swatch.isHighlighter && state.activeStylusTool == BooxStylusTool.FOUNTAIN_PEN) {
-                BooxStylusTool.KALEIDO_HIGHLIGHTER
-            } else if (!swatch.isHighlighter && state.activeStylusTool == BooxStylusTool.KALEIDO_HIGHLIGHTER) {
-                BooxStylusTool.FOUNTAIN_PEN
-            } else {
-                state.activeStylusTool
+            val tool = when {
+                swatch.isHighlighter && state.activeStylusTool == BooxStylusTool.FOUNTAIN_PEN -> BooxStylusTool.KALEIDO_HIGHLIGHTER
+                !swatch.isHighlighter && state.activeStylusTool == BooxStylusTool.KALEIDO_HIGHLIGHTER -> BooxStylusTool.FOUNTAIN_PEN
+                else -> state.activeStylusTool
             }
-            state.copy(activeSwatch = swatch, activeStylusTool = nextTool)
+            state.copy(activeSwatch = swatch, activeStylusTool = tool)
         }
     }
 
-    fun commitInkStroke(points: List<NormalizedInkPoint>, telemetry: String) {
+    fun commitInkStroke(points: List<NormalizedInkPoint>) {
         if (points.size < 2) return
         _readerState.update { state ->
             val isHl = state.activeStylusTool == BooxStylusTool.KALEIDO_HIGHLIGHTER || state.activeSwatch.isHighlighter
-            val stroke = BooxInkStroke(
-                id = UUID.randomUUID().toString(),
-                pageIndex = state.pageIndex,
-                points = points,
-                colorHex = state.activeSwatch.color.value.toLong(),
-                baseWidthPt = if (isHl) 18f else state.strokeWidthPt,
-                isHighlighter = isHl
-            )
             state.copy(
-                strokes = state.strokes + stroke,
-                lastStylusTelemetry = telemetry
+                strokes = state.strokes + BooxInkStroke(
+                    id = UUID.randomUUID().toString(),
+                    pageIndex = state.pageIndex,
+                    points = points,
+                    colorHex = state.activeSwatch.color.value.toLong(),
+                    baseWidthPt = if (isHl) 18f else state.strokeWidthPt,
+                    isHighlighter = isHl
+                )
             )
         }
+        persistAnnotations()
     }
 
-    fun commitQuadHighlight(bounds: NormalizedRect, telemetry: String) {
+    fun commitQuadHighlight(bounds: NormalizedRect) {
         _readerState.update { state ->
-            val hlSwatch = if (state.activeSwatch.isHighlighter) {
-                state.activeSwatch
-            } else {
-                BooxPenSwatches.first { it.isHighlighter }
-            }
-            val locator = "Page ${state.pageIndex + 1} · ${state.currentBlock.label}"
-            val item = QuadTextHighlight(
-                id = UUID.randomUUID().toString(),
-                pageIndex = state.pageIndex,
-                bounds = bounds,
-                snippet = locator,
-                colorHex = hlSwatch.color.value.toLong()
-            )
-            val newStudyCard = UnifiedStudyCard(
-                id = item.id,
-                sourceType = "PDF",
-                documentTitle = state.documentTitle,
-                locatorBadge = locator,
-                pageOrChapterIndex = state.pageIndex,
-                tierOrParagraphIndex = state.activeStepIndex,
-                quoteText = "Quad-Point Passage Captured in ${state.currentBlock.label} ([${(bounds.left * 100).toInt()}%, ${(bounds.top * 100).toInt()}%])",
-                reflectionCue = "Pinned automatically from PDF NeoFlow Matrix",
-                swatchId = hlSwatch.id,
-                colorHex = hlSwatch.color.value.toLong(),
-                timestampLabel = "Just now"
-            )
+            val swatch = if (state.activeSwatch.isHighlighter) state.activeSwatch else BooxPenSwatches.first { it.isHighlighter }
+            val id = UUID.randomUUID().toString()
+            val locator = "Page ${state.pageIndex + 1}"
             state.copy(
-                quadHighlights = state.quadHighlights + item,
-                studyCards = listOf(newStudyCard) + state.studyCards,
-                lastStylusTelemetry = telemetry
+                quadHighlights = state.quadHighlights + QuadTextHighlight(
+                    id = id,
+                    pageIndex = state.pageIndex,
+                    bounds = bounds,
+                    snippet = locator,
+                    colorHex = swatch.color.value.toLong()
+                ),
+                studyCards = listOf(
+                    UnifiedStudyCard(
+                        id = id,
+                        sourceType = "PDF",
+                        documentTitle = state.document?.title.orEmpty(),
+                        locatorBadge = locator,
+                        pageOrChapterIndex = state.pageIndex,
+                        tierOrParagraphIndex = state.activeStepIndex,
+                        quoteText = "Area highlight on page ${state.pageIndex + 1}",
+                        swatchId = swatch.id,
+                        colorHex = swatch.color.value.toLong(),
+                        createdMillis = clock()
+                    )
+                ) + state.studyCards
             )
         }
-    }
-
-    // Kindle EPUB Reflow Actions
-    fun cycleEpubTypographyPreset() {
-        _readerState.update { state ->
-            val presets = EInkTypographyPreset.entries
-            val next = presets[(presets.indexOf(state.epubTypographyPreset) + 1) % presets.size]
-            state.copy(
-                epubTypographyPreset = next,
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
-    }
-
-    fun toggleEpubTwoColumnMode() {
-        _readerState.update { state ->
-            state.copy(
-                epubTwoColumnMode = !state.epubTwoColumnMode,
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
+        persistAnnotations()
     }
 
     fun toggleEpubParagraphHighlight(cfiId: String, paragraphText: String, chapterIndex: Int, paragraphIndex: Int) {
         _readerState.update { state ->
-            val hlSwatch = if (state.activeSwatch.isHighlighter) {
-                state.activeSwatch
+            val swatch = if (state.activeSwatch.isHighlighter) state.activeSwatch else BooxPenSwatches.first { it.isHighlighter }
+            val highlights = state.epubHighlightedCfis.toMutableMap()
+            val cards = state.studyCards.toMutableList()
+            val cardId = "epub_$cfiId"
+            if (highlights.remove(cfiId) != null) {
+                cards.removeAll { it.id == cardId }
             } else {
-                BooxPenSwatches.first { it.isHighlighter }
-            }
-            val updatedMap = state.epubHighlightedCfis.toMutableMap()
-            val updatedCards = state.studyCards.toMutableList()
-            if (updatedMap.containsKey(cfiId)) {
-                updatedMap.remove(cfiId)
-                updatedCards.removeAll { it.id == "epub_$cfiId" }
-            } else {
-                updatedMap[cfiId] = hlSwatch
-                updatedCards.add(
+                highlights[cfiId] = swatch
+                cards.add(
                     0,
                     UnifiedStudyCard(
-                        id = "epub_$cfiId",
+                        id = cardId,
                         sourceType = "EPUB",
-                        documentTitle = state.activeEpubBook.title,
-                        locatorBadge = "Ch ${chapterIndex + 1} · ¶${paragraphIndex + 1} ($cfiId)",
+                        documentTitle = state.activeEpubBook?.title.orEmpty(),
+                        locatorBadge = state.activeEpubBook?.chapters?.getOrNull(chapterIndex)?.title
+                            ?: "Chapter ${chapterIndex + 1}",
                         pageOrChapterIndex = chapterIndex,
                         tierOrParagraphIndex = paragraphIndex,
                         quoteText = paragraphText,
-                        reflectionCue = "CFI-Anchored Kindle Highlight · Ready for Cornell Notes",
-                        swatchId = hlSwatch.id,
-                        colorHex = hlSwatch.color.value.toLong(),
-                        timestampLabel = "Just now"
+                        swatchId = swatch.id,
+                        colorHex = swatch.color.value.toLong(),
+                        createdMillis = clock()
                     )
                 )
             }
+            state.copy(epubHighlightedCfis = highlights, studyCards = cards)
+        }
+        persistAnnotations()
+    }
+
+    fun deleteStudyCard(card: UnifiedStudyCard) {
+        _readerState.update { state ->
             state.copy(
-                epubHighlightedCfis = updatedMap,
-                studyCards = updatedCards,
-                lastStylusTelemetry = "EPUB CFI Anchor ($cfiId) · ${hlSwatch.label}"
+                studyCards = state.studyCards.filterNot { it.id == card.id },
+                quadHighlights = state.quadHighlights.filterNot { it.id == card.id },
+                epubHighlightedCfis = if (card.id.startsWith("epub_")) {
+                    state.epubHighlightedCfis - card.id.removePrefix("epub_")
+                } else {
+                    state.epubHighlightedCfis
+                }
             )
         }
+        persistAnnotations()
     }
 
     fun jumpToStudyCardOrigin(card: UnifiedStudyCard) {
+        val before = _readerState.value
         _readerState.update { state ->
-            if (card.sourceType == "EPUB") {
+            val book = state.activeEpubBook
+            if (card.sourceType == "EPUB" && book != null) {
                 state.copy(
                     workspaceMode = BooxWorkspaceMode.KINDLE_EPUB,
-                    epubChapterIndex = card.pageOrChapterIndex.coerceIn(0, state.activeEpubBook.chapters.lastIndex),
+                    epubChapterIndex = card.pageOrChapterIndex.coerceIn(0, book.chapters.lastIndex),
+                    epubAnchor = EpubAnchor(card.tierOrParagraphIndex, 0),
+                    epubPageStarts = emptyList(),
                     regalFlashTick = state.regalFlashTick + 1
                 )
-            } else {
+            } else if (state.pageCount > 0) {
                 state.copy(
-                    workspaceMode = BooxWorkspaceMode.PDF_NEOFLOW,
-                    pageIndex = card.pageOrChapterIndex.coerceIn(0, (state.pageCount - 1).coerceAtLeast(0)),
+                    workspaceMode = state.readerModeForDocument ?: state.workspaceMode,
+                    pageIndex = card.pageOrChapterIndex.coerceIn(0, state.pageCount - 1),
                     activeStepIndex = card.tierOrParagraphIndex.coerceIn(0, (state.computedBlocks.size - 1).coerceAtLeast(0)),
                     regalFlashTick = state.regalFlashTick + 1
                 )
+            } else {
+                state
             }
         }
+        onPositionChanged(before)
     }
 
-    fun updateSidecarExportStatus(message: String) {
-        _readerState.update { it.copy(lastSidecarExportStatus = message) }
+    fun setExportStatus(message: String?) {
+        _readerState.update { it.copy(lastExportStatus = message) }
     }
 
     fun eraseAtNormalizedPoint(x: Float, y: Float, radius: Float = 0.035f) {
+        val before = _readerState.value
         _readerState.update { state ->
             val page = state.pageIndex
-            val remainingStrokes = state.strokes.filterNot { stroke ->
-                stroke.pageIndex == page && stroke.points.any { pt ->
-                    hypot(pt.x - x, pt.y - y) <= radius
-                }
-            }
-            val remainingQuads = state.quadHighlights.filterNot { quad ->
-                quad.pageIndex == page &&
-                    x in quad.bounds.left..quad.bounds.right &&
-                    y in quad.bounds.top..quad.bounds.bottom
-            }
             state.copy(
-                strokes = remainingStrokes,
-                quadHighlights = remainingQuads
+                strokes = state.strokes.filterNot { stroke ->
+                    stroke.pageIndex == page && stroke.points.any { hypot(it.x - x, it.y - y) <= radius }
+                },
+                quadHighlights = state.quadHighlights.filterNot { q ->
+                    q.pageIndex == page && x in q.bounds.left..q.bounds.right && y in q.bounds.top..q.bounds.bottom
+                }
             )
+        }
+        val after = _readerState.value
+        if (after.strokes.size != before.strokes.size || after.quadHighlights.size != before.quadHighlights.size) {
+            persistAnnotations()
         }
     }
 
     fun undoLastAnnotation() {
         _readerState.update { state ->
-            if (state.strokes.isNotEmpty()) {
-                state.copy(strokes = state.strokes.dropLast(1))
-            } else if (state.cornellStrokes.isNotEmpty()) {
-                state.copy(cornellStrokes = state.cornellStrokes.dropLast(1))
-            } else if (state.quadHighlights.isNotEmpty()) {
-                state.copy(quadHighlights = state.quadHighlights.dropLast(1))
-            } else {
-                state
+            when {
+                state.strokes.isNotEmpty() -> state.copy(strokes = state.strokes.dropLast(1))
+                state.cornellStrokes.isNotEmpty() -> state.copy(cornellStrokes = state.cornellStrokes.dropLast(1))
+                state.quadHighlights.isNotEmpty() -> {
+                    val last = state.quadHighlights.last()
+                    state.copy(
+                        quadHighlights = state.quadHighlights.dropLast(1),
+                        studyCards = state.studyCards.filterNot { it.id == last.id }
+                    )
+                }
+                else -> state
             }
         }
+        persistAnnotations()
     }
 
     fun clearPageAnnotations() {
         _readerState.update { state ->
             val page = state.pageIndex
+            val removedQuadIds = state.quadHighlights.filter { it.pageIndex == page }.map { it.id }.toSet()
             state.copy(
                 strokes = state.strokes.filterNot { it.pageIndex == page },
                 quadHighlights = state.quadHighlights.filterNot { it.pageIndex == page },
+                studyCards = state.studyCards.filterNot { it.id in removedQuadIds },
                 regalFlashTick = state.regalFlashTick + 1
             )
         }
+        persistAnnotations()
     }
 
-    fun cycleRefreshMode() {
-        _readerState.update { state ->
-            val modes = BooxRefreshMode.entries
-            val next = modes[(modes.indexOf(state.refreshMode) + 1) % modes.size]
-            state.copy(
-                refreshMode = next,
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
+    companion object {
+        private const val MAX_RECENTS = 30
     }
-
-    fun triggerManualRegalRefresh() {
-        _readerState.update { state ->
-            state.copy(
-                refreshMode = BooxRefreshMode.REGAL_HD,
-                turnsSinceLastRegal = 0,
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
-    }
-
-    fun toggleHighContrastBAndW() {
-        _readerState.update { state ->
-            state.copy(
-                highContrastBAndW = !state.highContrastBAndW,
-                regalFlashTick = state.regalFlashTick + 1
-            )
-        }
-    }
-}
-
-sealed interface MainScreenUiState {
-    object Loading : MainScreenUiState
-    data class Error(val throwable: Throwable) : MainScreenUiState
-    data class Success(val data: List<String>) : MainScreenUiState
 }

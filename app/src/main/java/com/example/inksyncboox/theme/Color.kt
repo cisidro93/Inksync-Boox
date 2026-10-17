@@ -2,11 +2,9 @@ package com.example.inksyncboox.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ============================================================================
-// MODERN BOOX OS 4.0 & KALEIDO 3 E-INK PALETTE (Boox Note Air 4C)
-// Warm alabaster & stone surfaces, subtle 1dp hairlines, crisp charcoal ink,
-// and high-luminance Kaleido 3 pastel highlights.
-// ============================================================================
+// E-ink palette for the Note Air 4C (Kaleido 3 color filter over a monochrome panel).
+// Near-black text on white for contrast; light pastel highlighter colors so highlights
+// read as pale tints on the color layer and never darken the text underneath.
 
 val EInkPaperWhite = Color(0xFFFFFFFF)
 val EInkWarmIvory = Color(0xFFFAF9F5)
@@ -15,14 +13,14 @@ val EInkBorderGray = Color(0xFFE4E2DD)
 val EInkMutedText = Color(0xFF52525B)
 val EInkPureBlack = Color(0xFF18181B)
 
-// Kaleido 3 Optimized Highlighter & Accent Colors (High Luminance, Crisp CFA Mapping)
+// Highlighter colors
 val KaleidoAmberHighlight = Color(0xFFFEF08A)
 val KaleidoMintHighlight = Color(0xFFBBF7D0)
 val KaleidoCyanHighlight = Color(0xFFBAE6FD)
 val KaleidoCoralHighlight = Color(0xFFFECDD3)
 val KaleidoLavenderHighlight = Color(0xFFE9D5FF)
 
-// Kaleido 3 Stylus Ink Colors (Refined for 150 PPI RGB subpixels)
+// Pen ink colors
 val KaleidoCobaltInk = Color(0xFF1D4ED8)
 val KaleidoCrimsonInk = Color(0xFFB91C1C)
 val KaleidoEmeraldInk = Color(0xFF15803D)

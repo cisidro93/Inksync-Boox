@@ -2,25 +2,28 @@ package com.example.inksyncboox.epub
 
 import android.content.Context
 import android.net.Uri
+import android.graphics.Typeface
 import android.text.Html
+import android.text.style.StyleSpan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.ByteArrayInputStream
-import java.io.StringReader
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 
 /**
- * Real Zero-Heap-Explosion `.epub` Parser & Extractor.
+ * `.epub` parser.
  *
  * Parses any DRM-free `.epub` file selected by the user via Android's Storage Access Framework (`Uri`):
  * 1. Streams the ZIP archive entries in memory-safe chunks.
  * 2. Parses `META-INF/container.xml` to locate the package `.opf` descriptor.
  * 3. Parses `<metadata>`, `<manifest>`, and `<spine>` from the `.opf` to determine exact reading order.
  * 4. Extracts and strips/normalizes XHTML chapter bodies into `EpubChapter` and `EpubParagraph` blocks
- *    with deterministic canonical paragraph IDs (`chX_pY`) so Wacom highlights and margin notes stay locked.
+ *    with deterministic paragraph IDs (`chX_pY`) so highlights stay attached, keeping bold/italic runs.
+ *
+ * Limitations: images, tables and CSS layout are not rendered; DRM-protected books are not supported.
  */
 object RealEpubParser {
 
@@ -130,8 +133,7 @@ object RealEpubParser {
         EpubBookDocument(
             id = "epub_${uri.toString().hashCode()}",
             title = parsedOpf.title.ifBlank { fallbackFileName.removeSuffix(".epub") },
-            author = parsedOpf.author.ifBlank { "Personal EPUB Library" },
-            categoryTag = "EPUB · ${chapters.size} Chapters",
+            author = parsedOpf.author,
             chapters = chapters
         )
     }
@@ -213,7 +215,7 @@ object RealEpubParser {
 
         return OpfMetadataResult(
             title = title.ifBlank { fallbackTitle.removeSuffix(".epub") },
-            author = author.ifBlank { "Imported EPUB Author" },
+            author = author,
             manifestById = manifest,
             spineIds = spine
         )
@@ -234,13 +236,66 @@ object RealEpubParser {
         return normalized.joinToString("/")
     }
 
+    private fun decodeHtml(bytes: ByteArray): String {
+        // Honour an explicit XML/HTML encoding declaration; EPUB requires UTF-8 or UTF-16 but
+        // older books sometimes declare windows-1252 / iso-8859-1.
+        val head = String(bytes, 0, minOf(bytes.size, 512), Charsets.ISO_8859_1)
+        val declared = Regex("(?i)(?:encoding|charset)\\s*=\\s*[\"']?([A-Za-z0-9._-]+)")
+            .find(head)?.groupValues?.getOrNull(1)
+        val charset = try {
+            declared?.let { java.nio.charset.Charset.forName(it) } ?: Charsets.UTF_8
+        } catch (_: Throwable) {
+            Charsets.UTF_8
+        }
+        return String(bytes, charset).removePrefix("\uFEFF")
+    }
+
+    /**
+     * Converts an HTML fragment to plain text with collapsed whitespace, keeping bold/italic
+     * runs as [EpubInlineSpan]s whose offsets refer to the collapsed text.
+     */
+    internal fun htmlToStyledText(innerHtml: String): Pair<String, List<EpubInlineSpan>> {
+        val spanned = Html.fromHtml(innerHtml, Html.FROM_HTML_MODE_LEGACY)
+        val raw = spanned.toString()
+        val out = StringBuilder(raw.length)
+        val map = IntArray(raw.length + 1)
+        var lastWasSpace = true // drops leading whitespace
+        for (i in raw.indices) {
+            map[i] = out.length
+            val c = raw[i]
+            if (c == '\uFFFC') continue // embedded image placeholder
+            if (c.isWhitespace()) {
+                if (!lastWasSpace) {
+                    out.append(' ')
+                    lastWasSpace = true
+                }
+            } else {
+                out.append(c)
+                lastWasSpace = false
+            }
+        }
+        map[raw.length] = out.length
+        while (out.isNotEmpty() && out.last() == ' ') out.setLength(out.length - 1)
+        val textLength = out.length
+
+        val spans = spanned.getSpans(0, spanned.length, StyleSpan::class.java).mapNotNull { span ->
+            val bold = span.style == Typeface.BOLD || span.style == Typeface.BOLD_ITALIC
+            val italic = span.style == Typeface.ITALIC || span.style == Typeface.BOLD_ITALIC
+            if (!bold && !italic) return@mapNotNull null
+            val s = map[spanned.getSpanStart(span).coerceIn(0, raw.length)].coerceAtMost(textLength)
+            val e = map[spanned.getSpanEnd(span).coerceIn(0, raw.length)].coerceAtMost(textLength)
+            if (e > s) EpubInlineSpan(s, e, bold, italic) else null
+        }
+        return out.toString() to spans
+    }
+
     private fun extractChapterFromHtml(
         htmlBytes: ByteArray,
         chapterIndex: Int,
         defaultChapterTitle: String
     ): EpubChapter? {
         val rawHtml = try {
-            String(htmlBytes, Charsets.UTF_8)
+            decodeHtml(htmlBytes)
         } catch (_: Throwable) {
             return null
         }
@@ -254,11 +309,11 @@ object RealEpubParser {
         // Extract heading if present
         val headingMatch = Regex("(?is)<h[1-3]\\b[^>]*>(.*?)</h[1-3]>").find(cleanedHtml)
         val detectedHeading = headingMatch?.groupValues?.getOrNull(1)?.let {
-            Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString().trim()
+            htmlToStyledText(it).first
         }?.takeIf { it.isNotBlank() }
 
-        // Split into block-level paragraphs (<p>, <h1>..<h4>, <blockquote>, <li>, or double-newline)
-        val blockMatches = Regex("(?is)<(h[1-4]|p|blockquote|li)\\b[^>]*>(.*?)</\\1>").findAll(cleanedHtml).toList()
+        // Split into block-level paragraphs (<p>, <h1>..<h6>, <blockquote>, <li>)
+        val blockMatches = Regex("(?is)<(h[1-6]|p|blockquote|li)\\b[^>]*>(.*?)</\\1>").findAll(cleanedHtml).toList()
 
         val paragraphs = mutableListOf<EpubParagraph>()
 
@@ -266,20 +321,17 @@ object RealEpubParser {
             var pIdx = 0
             for (match in blockMatches) {
                 val tag = match.groupValues[1].lowercase()
-                val innerHtml = match.groupValues[2]
-                val plain = Html.fromHtml(innerHtml, Html.FROM_HTML_MODE_LEGACY)
-                    .toString()
-                    .replace(Regex("\\s+"), " ")
-                    .trim()
-                if (plain.length >= 2) {
+                val (text, spans) = htmlToStyledText(match.groupValues[2])
+                if (text.isNotEmpty()) {
                     paragraphs.add(
                         EpubParagraph(
                             cfiId = "ch${chapterIndex + 1}_p${pIdx + 1}",
                             chapterIndex = chapterIndex,
                             indexInChapter = pIdx,
-                            text = plain,
+                            text = text,
                             isHeading = tag.startsWith("h"),
-                            isBlockQuote = tag == "blockquote"
+                            isBlockQuote = tag == "blockquote",
+                            spans = spans
                         )
                     )
                     pIdx++
@@ -288,9 +340,10 @@ object RealEpubParser {
         } else {
             // Fallback for plain/div-based XHTML chapters
             val plainAll = Html.fromHtml(cleanedHtml, Html.FROM_HTML_MODE_LEGACY).toString()
+                .replace("\uFFFC", "")
             plainAll.split(Regex("\\n\\s*\\n|\\r\\n\\s*\\r\\n"))
                 .map { it.replace(Regex("\\s+"), " ").trim() }
-                .filter { it.length >= 3 }
+                .filter { it.isNotEmpty() }
                 .forEachIndexed { pIdx, line ->
                     paragraphs.add(
                         EpubParagraph(
@@ -312,7 +365,6 @@ object RealEpubParser {
         return EpubChapter(
             index = chapterIndex,
             title = detectedHeading ?: defaultChapterTitle,
-            subtitle = "Imported EPUB · ${paragraphs.size} Paragraphs · ~$wordCount words",
             estimatedMinutes = estimatedMins,
             paragraphs = paragraphs
         )
