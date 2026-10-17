@@ -115,7 +115,7 @@ class BooxPdfEngine(private val context: Context) {
                     ComicArchiveExtractor.extractImages(
                         archive = cacheFile,
                         outDir = File(context.cacheDir, "comic-pages"),
-                        isImage = this::isComicImage
+                        isImage = { name -> isComicImage(name) }
                     )
                 } catch (t: Throwable) {
                     error("This archive couldn't be read (${t.message ?: "unsupported format"}).")
