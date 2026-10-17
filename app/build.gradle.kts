@@ -100,8 +100,6 @@ dependencies {
     exclude(group = "com.android.support", module = "support-compat")
     exclude(group = "com.android.support", module = "appcompat-v7")
     exclude(group = "com.tencent", module = "mmkv")
-    // Old permissions helper only published to the retired JCenter; not used by the pen layer.
-    exclude(group = "pub.devrel", module = "easypermissions")
   }
   implementation(libs.rxjava)
   implementation(libs.rxandroid)

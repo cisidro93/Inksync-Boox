@@ -19,6 +19,8 @@ dependencyResolutionManagement {
                 includeGroupByRegex("androidx.*")
                 includeGroupByRegex("com\\.android.*")
                 includeGroupByRegex("com\\.google.*")
+                // easypermissions, needed by the Onyx SDK
+                includeGroupByRegex("pub\\.devrel.*")
             }
         }
         mavenCentral()
