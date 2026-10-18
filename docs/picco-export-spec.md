@@ -1,6 +1,8 @@
-# Picco export spec (XTC / XTCH)
+# Picco export spec (EPUB / XTC / XTCH)
 
-**Spec version: 1.** Shared by InkSync Boox (Kotlin) and InkSync Pro (Swift). Both apps must produce **byte-identical** files for the same decoded source pixels and the same options. The reference implementation is [`tools/picco_reference.py`](../tools/picco_reference.py). When this document and the Python file disagree, the Python file wins and this document gets fixed.
+**Spec version: 2.** Shared by InkSync Boox (Kotlin) and InkSync Pro (Swift). Both apps must produce **byte-identical** XTC/XTCH files, and pixel-identical EPUB screens before image encoding, for the same decoded source pixels and the same options.
+
+Version 2 adds the **Picco EPUB** output (section 9) and makes it the default, because the stock Picco firmware and the BOOX Tiles app/website handle EPUB but don't list XTC. Everything about XTC/XTCH is unchanged from version 1, and so are fixtures A–C. The reference implementation is [`tools/picco_reference.py`](../tools/picco_reference.py). When this document and the Python file disagree, the Python file wins and this document gets fixed.
 
 Target: BOOX Picco, 480 × 800 black-and-white e-ink, running Boox's fork of CrossPoint Reader. The file layout below is taken from CrossPoint's reader source (`lib/Xtc/Xtc/XtcTypes.h`, `XtcParser.cpp`, `src/activities/reader/XtcReaderActivity.cpp`).
 
@@ -108,11 +110,12 @@ Row-major, top to bottom, 60 bytes per row. The leftmost pixel is the most signi
 
 | Option | Values | Default |
 |---|---|---|
-| format | 2-bit XTCH, 1-bit XTC | 2-bit |
+| format | Picco EPUB, 2-bit XTCH, 1-bit XTC | Picco EPUB |
+| epubImages | JPEG (baseline, quality 90), PNG (8-bit gray) — EPUB only | JPEG |
 | layout | whole pages, panels, panels with page overview | whole pages |
 | autoCrop | on/off | on |
 | splitSpreads | on/off | on |
-| dither | Floyd–Steinberg, Atkinson, none | Floyd–Steinberg |
+| dither | Floyd–Steinberg, Atkinson, none — XTC/XTCH only (the Picco dithers EPUB images itself) | Floyd–Steinberg |
 | rotateWide | on/off | off |
 | rightToLeft | the book's direction (manga = on) | from the reader |
 
@@ -130,7 +133,7 @@ For each source page *i*, in source order:
      - If the app has saved panels for it (InkSync Pro's Panel Editor, or InkSync Boox's tier grid), use them in their saved order after **merging small panels** (below).
      - Otherwise use the **auto grid**: exactly 2 cells.
    - Add a chapter record named `Page {i+1}` covering this source page's output pages.
-4. Whole-page exports have no chapters.
+4. Whole-page exports have no chapters. (EPUB always has a table of contents; see section 9.)
 5. Panels drawn on the uncropped page (InkSync Pro's Panel Editor): for a page that has such panels, auto-crop and spread splitting are turned off for that page only, so its base is the whole page and the panels apply as normalized rectangles. InkSync Boox's tier grid is applied per base instead, so it doesn't need this rule.
 
 **Merging small panels.** Panels are normalized rectangles (0–1) relative to their half or page, in reading order. Work through them in order:
@@ -167,10 +170,10 @@ For each source page *i*, in source order:
 
 **Step 4. Rotate** (if rotateWide is on and `5×rw > 6×rh`): rotate 90° clockwise. The new image is rh wide and rw tall, and `new(x, y) = old(y, rh − 1 − x)`.
 
-**Step 5. Fit to 480 × 800.**
+**Step 5. Fit to the target** (TW × TH = 480 × 800 for XTC/XTCH, 464 × 764 for EPUB).
 - Choose the target size:
-  - If `480×rh ≤ 800×rw`: `dw = 480`, `dh = max(1, (rh×480 + rw/2)/rw)`.
-  - Otherwise: `dh = 800`, `dw = max(1, (rw×800 + rh/2)/rh)`.
+  - If `TW×rh ≤ TH×rw`: `dw = TW`, `dh = max(1, (rh×TW + rw/2)/rw)`.
+  - Otherwise: `dh = TH`, `dw = max(1, (rw×TH + rh/2)/rh)`.
 - Cap enlargement at 2.5×: if `2×dw > 5×rw`, then `dw = max(1, 5×rw/2)` and `dh = max(1, 5×rh/2)`.
 - Use **bilinear** if `dw×dh > rw×rh`, otherwise **box**.
 
@@ -226,12 +229,20 @@ Title `"Fixture"`, empty author, auto-grid panels:
 
 The auto-crop of the first fixture page is `(26, 35, 274, 385)`.
 
+**EPUB fixtures.** Hash of every screen's raw 464 × 764 gray canvas (section 9, before image encoding), concatenated in screen order:
+
+| Fixture | Options | Screens | SHA-256 | Table of contents (title → first screen, 0-based) |
+|---|---|---|---|---|
+| D | panels with overview, autoCrop, split, no rotate, left-to-right | 11 | `fd5485665ce2936cfc76cf9050aac18da4eaeb3f3193fcd61ad2f33669ae776a` | Page 1 → 0, Page 2 → 3, Page 3 → 8 |
+| E | whole pages, no autoCrop, split, rotate, right-to-left | 4 | `9f1f51e8524a4d926a61a0d19ae827422db5976c1bcde61b02afd1a4ca71428b` | Page 1 → 0, Page 2 → 1, Page 3 → 3 |
+
 ## 6. What is and isn't byte-identical across apps
 
-- **Identical:** everything from decoded pixels onward. The fixtures prove it.
+- **Identical:** everything from decoded pixels onward: XTC/XTCH files byte for byte, EPUB screens pixel for pixel. The fixtures prove it.
 - **Not identical:**
   - Decoding itself: JPEG decoders and PDF renderers differ slightly between Android and iOS.
   - Panels: they come from each app's own editor (tier grid vs Panel Editor).
+  - EPUB image encoding (JPEG and Deflate encoders differ) and the `dcterms:modified` time. The EPUB's structure and file names are the same.
 - **Source decode rules (both apps):**
   - Images: decode at full size. If W × H > 16,000,000, decode at a smaller size (each platform's own way).
   - PDF pages: render 1440 px wide, height `(1440×ph + pw/2)/pw` from the page size in points, on white.
@@ -247,8 +258,66 @@ The export also saves (outside the file) one entry per output page: source page 
   - `POST http://<host>/mkdir`, form `name=Comics&path=/`, creates the folder (errors ignored).
   - `POST http://<host>/upload?path=/Comics` uploads the file as multipart field `file`.
   - Try the address the user entered, then `crosspoint.local`.
+- **Picco EPUB sending:** the Picco's own BOOX Tiles app and booxtiles.com take EPUB files (Wi-Fi, cloud, USB). Apps offer **Share** (pick BOOX Tiles or any app) and **Save**. The Wi-Fi upload above is labeled as for CrossPoint firmware; EPUBs go to `/Books`, XTC/XTCH to `/Comics`.
 - **EPUB optimizer:**
-  - Shrink images larger than 480 × 800 (keeping aspect ratio) and convert them to gray. Keep each image's format (JPEG at quality 80, PNG lossless).
+  - Re-encode an image if it is larger than 464 × 764, is in color, or is a progressive JPEG (CrossPoint shows progressive JPEGs at 1/8 resolution and skips images over 3,145,728 pixels). Shrink to fit 464 × 764 keeping the aspect ratio, convert to gray, and keep each image's format (baseline JPEG at quality 85, PNG 8-bit gray).
   - Text, CSS and structure are unchanged.
   - Write `mimetype` first and uncompressed.
   - Refuse DRM: `META-INF/rights.xml`, or `META-INF/encryption.xml` listing anything other than font obfuscation (`http://www.idpf.org/2008/embedding`, `http://ns.adobe.com/pdf/enc#RC`).
+
+## 9. Picco EPUB
+
+An EPUB where each output page is one full-screen picture. It plays to how CrossPoint 1.2 (`lib/Epub`) lays out images:
+- The reading area is 464 × 764 with the default margins (480 × 800 minus margins and status bar).
+- An image is never enlarged. A larger one is shrunk with nearest-neighbour sampling, so the app sizes it exactly instead.
+- An image is placed top-aligned and horizontally centered. It starts a new page whenever it doesn't fit below what's already on the page, so a 764-pixel-tall image always gets its own page.
+- The device always applies its own ordered dithering to EPUB images, so the app sends **smooth gray** (no step 7).
+- Progressive JPEGs are shown at 1/8 resolution, and images over 3,145,728 pixels aren't shown at all.
+
+**Screens.** Plan exactly as in section 3. Render each output page with steps 1–6, fitting to 464 × 764, then place the image on a white (255) 464 × 764 canvas at `((464 − dw)/2, (764 − dh)/2)`. Encode the canvas as:
+- **JPEG** (default): baseline (not progressive), quality 90, gray where the encoder allows it, otherwise YCbCr with no chroma subsampling or with 4:2:0 (both are fine because the image is gray).
+- **PNG:** 8-bit grayscale (color type 0), no interlace, no other chunks than IHDR, IDAT, IEND.
+
+**Files** (zip; `mimetype` must be the first entry and **stored**, everything else deflated):
+
+```
+mimetype                       application/epub+zip   (no newline)
+META-INF/container.xml         rootfile OEBPS/content.opf, media-type application/oebps-package+xml
+OEBPS/content.opf
+OEBPS/nav.xhtml
+OEBPS/toc.ncx
+OEBPS/p0001.xhtml …            one per source page (see below), in reading order
+OEBPS/images/s0001.jpg …       one per screen (.png when PNG), in reading order
+```
+
+Numbers are 1-based and zero-padded to 4 digits (more digits only beyond 9999).
+
+**Pages.** Each source page that produced at least one screen gets one XHTML file. It holds that page's screens in order, one `<img>` each, with no CSS, no `width`/`height` attributes and no text, so nothing pushes an image down:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="en" xml:lang="en">
+<head><meta charset="UTF-8"/><title>Page 1</title></head>
+<body>
+<div><img src="images/s0001.jpg" alt=""/></div>
+<div><img src="images/s0002.jpg" alt=""/></div>
+</body>
+</html>
+```
+
+**Package (`content.opf`)**, EPUB 3.0 with EPUB 2 fallbacks:
+- `<package version="3.0" unique-identifier="bookid" xmlns="http://www.idpf.org/2007/opf">`, with metadata in the `dc` and `opf` namespaces.
+- `dc:identifier id="bookid"`: `urn:uuid:` plus a name-based UUID: the first 16 bytes of SHA-256 of the UTF-8 text `"inksync-picco\n" + title + "\n" + author + "\n" + screenCount`, with byte 6 set to `(b & 0x0F) | 0x50` and byte 8 to `(b & 0x3F) | 0x80`, written as lowercase 8-4-4-4-12 hex. Test vectors: (`Fixture`, empty author, 11) → `urn:uuid:dc8f66da-e325-56ac-a428-e9af60f98228`; (`ワンピース 第1巻`, `尾田`, 3) → `urn:uuid:1a60bfee-49bc-5f2a-9bdb-1fa2a501a352`.
+- `dc:title` (the title, or the file name without extension), `dc:creator` (only if the author isn't empty), `dc:language` `en`, `meta property="dcterms:modified"` (export time, UTC, `YYYY-MM-DDThh:mm:ssZ`).
+- Series (only when known, for example from ComicInfo.xml): `meta name="calibre:series"` and `meta name="calibre:series_index"`, plus `meta property="belongs-to-collection" id="series"` with `meta refines="#series" property="collection-type"` `series` and `group-position`.
+- **Cover:** the first screen's image. Its manifest item is `id="cover"` with `properties="cover-image"`, and there is also `<meta name="cover" content="cover"/>`.
+- Manifest ids: `nav` (properties `nav`), `ncx`, `p0001`…, `cover` for screen 1 and `s0002`… for the rest. Media types `application/xhtml+xml`, `application/x-dtbncx+xml`, `image/jpeg` or `image/png`.
+- `<spine toc="ncx">` lists the pages in order. No `page-progression-direction`: screens are already in reading order, which is how manga reads on the Picco too.
+
+**Table of contents.** One entry per source page, titled `Page {i+1}` and pointing at its XHTML file, in both `nav.xhtml` (`<nav epub:type="toc">` with an `<ol>`) and `toc.ncx` (`navPoint id="np{n}" playOrder="{n}"`, `dtb:uid` = the identifier, `dtb:depth` 1). The nav file is in the manifest but not in the spine.
+
+**Text escaping.** Titles and author in XML: escape `&`, `<`, `>`, `"`, `'`.
+
+**Estimate shown before converting:** about 90 KB per screen for JPEG, 200 KB for PNG.
+

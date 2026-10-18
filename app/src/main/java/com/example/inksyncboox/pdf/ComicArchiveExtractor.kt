@@ -16,6 +16,8 @@ object ComicArchiveExtractor {
 
     enum class Format { ZIP, OTHER }
 
+    const val COMIC_INFO = "ComicInfo.xml"
+
     /** Detects ZIP by its magic bytes; many `.cbr` files are really zips. */
     fun detect(file: File): Format {
         val header = ByteArray(4)
@@ -28,6 +30,7 @@ object ComicArchiveExtractor {
     /**
      * Extracts every image entry of [archive] into [outDir] (emptied first).
      * Returns entry name -> extracted file, or throws if the archive can't be read.
+     * A `ComicInfo.xml` entry (comic metadata) is also unpacked, to [COMIC_INFO] in [outDir].
      */
     fun extractImages(archive: File, outDir: File, isImage: (String) -> Boolean): Map<String, File> {
         outDir.deleteRecursively()
@@ -45,6 +48,13 @@ object ComicArchiveExtractor {
                 val name = ArchiveEntry.pathnameUtf8(entry)
                     ?: ArchiveEntry.pathname(entry)?.decodeToString()
                 val isFile = ArchiveEntry.filetype(entry) == ArchiveEntry.AE_IFREG
+                if (name != null && isFile && name.substringAfterLast('/').equals(COMIC_INFO, ignoreCase = true)) {
+                    ParcelFileDescriptor.open(
+                        File(outDir, COMIC_INFO),
+                        ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE
+                    ).use { pfd -> Archive.readDataIntoFd(handle, pfd.fd) }
+                    continue
+                }
                 if (name == null || !isFile || !isImage(name)) {
                     Archive.readDataSkip(handle)
                     continue

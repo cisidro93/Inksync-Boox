@@ -95,38 +95,90 @@ object PiccoJobs {
         _state.value = PiccoJobState.Working("Preparing…", 0, 0)
         job = scope.launch {
             val engine = BooxPdfEngine(app, cacheTag = "export")
-            val target = File(outDir(app), fileName(title, if (options.twoBit) "xtch" else "xtc"))
-            val part = File(target.path + ".part")
+            val dir = outDir(app)
+            var part: File? = null
             try {
                 val pages = if (kind == DocKind.PDF) engine.openPdf(uri) else engine.openComic(uri)
+                val info = ComicInfo.parse(engine.comicInfoXml)
+                val fallbackTitle = title.substringBeforeLast('.', title)
+                val meta = info?.meta(fallbackTitle) ?: PiccoMeta(fallbackTitle)
+                val opts = if (info?.rightToLeft == true) options.copy(rightToLeft = true) else options
+                val failed = sortedSetOf<Int>()
                 val source = object : PiccoPageSource {
                     override val pageCount = pages
-                    override suspend fun size(index: Int) = engine.exportPageSize(index)
-                    override suspend fun decodeArgb(index: Int) = engine.exportPageArgb(index)
+                    override suspend fun size(index: Int) = try {
+                        engine.exportPageSize(index)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        failed += index
+                        PLACEHOLDER_SIZE
+                    }
+                    override suspend fun decodeArgb(index: Int): IntArray {
+                        if (index in failed) error("unreadable")
+                        return engine.exportPageArgb(index)
+                    }
                 }
                 val panels = grid?.panels()
+                val panelsFor = panels?.let { p -> { _: Int, _: BaseKind -> p } }
+
+                // Free space: plan from page sizes (no decoding) and compare with the estimate.
+                val sizes = (0 until pages).map { source.size(it) }
+                val planned = PiccoPlanner.plan(sizes, opts, panelsFor)
+                val needed = if (opts.isEpub) PiccoEpub.estimateBytes(planned.pages.size, opts.epubImages)
+                else Xtc.fileSize(opts.twoBit, planned.pages.size, planned.chapters.size)
+                val free = dir.usableSpace
+                if (free in 1 until needed + 50L * 1024 * 1024) {
+                    error("Not enough free space: the file needs about ${needed / 1_048_576 + 1} MB. Free some space and try again.")
+                }
+
+                val target = File(dir, fileName(meta.title, opts.format.extension))
+                part = File(target.path + ".part")
+                val label = "Converting"
                 val plan = part.outputStream().buffered(256 * 1024).use { out ->
                     PiccoExporter.export(
-                        source, options, title.substringBeforeLast('.', title), "", out,
-                        panelsFor = panels?.let { p -> { _: Int, _: BaseKind -> p } }
-                    ) { done, total -> _state.value = PiccoJobState.Working("Converting", done, total) }
+                        source = cachedSizes(source, sizes),
+                        opts = opts,
+                        meta = meta,
+                        out = out,
+                        panelsFor = panelsFor,
+                        encoder = AndroidGrayEncoder,
+                        onPageFailed = { index, _ -> failed += index }
+                    ) { done, total -> _state.value = PiccoJobState.Working(label, done, total) }
                 }
                 if (!part.renameTo(target)) error("Couldn't save the converted file")
-                savePositionMap(app, docKey, target.name, options, plan)
-                val layout = if (options.layout == PiccoLayout.WHOLE) "pages" else "screens"
-                _state.value = PiccoJobState.Ready(target, plan.pages.size, false, "${plan.pages.size} $layout from $pages pages")
+                savePositionMap(app, docKey, target.name, opts, plan)
+                val unit = if (opts.layout == PiccoLayout.WHOLE) "pages" else "screens"
+                val notes = mutableListOf("${plan.pages.size} $unit from $pages pages, ${"%.1f".format(target.length() / 1_048_576.0)} MB")
+                if (info != null) notes += "title from ComicInfo.xml" + if (info.rightToLeft && !options.rightToLeft) ", manga order" else ""
+                if (failed.isNotEmpty()) {
+                    val list = failed.take(8).joinToString(", ") { (it + 1).toString() } + if (failed.size > 8) "…" else ""
+                    notes += "${failed.size} unreadable ${if (failed.size == 1) "page was" else "pages were"} left blank ($list)"
+                }
+                _state.value = PiccoJobState.Ready(target, plan.pages.size, opts.isEpub, notes.joinToString("; "))
             } catch (e: CancellationException) {
-                part.delete()
+                part?.delete()
                 _state.value = PiccoJobState.Idle
                 throw e
             } catch (t: Throwable) {
-                part.delete()
-                _state.value = PiccoJobState.Failed(t.message ?: "Conversion failed", null)
+                part?.delete()
+                val message = if (t is OutOfMemoryError) "The device ran out of memory. Try again, or close other apps." else t.message
+                _state.value = PiccoJobState.Failed(message ?: "Conversion failed", null)
             } finally {
                 engine.close()
             }
         }
     }
+
+    /** A page source whose sizes were already read (and placeholders filled in for unreadable pages). */
+    private fun cachedSizes(source: PiccoPageSource, sizes: List<Pair<Int, Int>>) = object : PiccoPageSource {
+        override val pageCount = source.pageCount
+        override suspend fun size(index: Int) = sizes[index]
+        override suspend fun decodeArgb(index: Int) = source.decodeArgb(index)
+    }
+
+    /** Size used to plan a page that can't be read; it is exported as a white page. */
+    private val PLACEHOLDER_SIZE = 1000 to 1500
 
     fun optimizeEpub(context: Context, uri: Uri, title: String) {
         val app = context.applicationContext
@@ -136,6 +188,10 @@ object PiccoJobs {
             val target = File(outDir(app), fileName("${title.substringBeforeLast('.', title)} (Picco)", "epub"))
             val part = File(target.path + ".part")
             try {
+                val needed = app.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }?.takeIf { it > 0 } ?: 0L
+                if (target.parentFile!!.usableSpace in 1 until needed + 50L * 1024 * 1024) {
+                    error("Not enough free space to optimize this book.")
+                }
                 val result = app.contentResolver.openInputStream(uri)?.use { input ->
                     part.outputStream().buffered().use { out -> EpubOptimizer.optimize(input, out, AndroidGrayTranscoder) }
                 } ?: error("Couldn't open the book")
@@ -207,24 +263,46 @@ object PiccoJobs {
             pages.put(JSONObject().put("source", p.source).put("kind", p.base.key).put("panel", p.panelIndex))
         }
         val json = JSONObject()
-            .put("specVersion", Xtc.SPEC_VERSION)
+            .put("specVersion", PICCO_SPEC_VERSION)
             .put("file", fileName)
-            .put("format", if (options.twoBit) "xtch" else "xtc")
+            .put("format", options.format.extension)
             .put("layout", options.layout.name)
             .put("pages", pages)
         File(dir, "$docKey.json").writeText(json.toString())
     }
 }
 
-/** Shrinks EPUB images to fit 480 × 800 and converts them to gray, keeping their format. */
+/** Encodes Picco EPUB screens: baseline JPEG (Android's encoder never writes progressive) or 8-bit gray PNG. */
+object AndroidGrayEncoder : GrayImageEncoder {
+    override fun encode(gray: ByteArray, w: Int, h: Int, format: EpubImages): ByteArray {
+        if (format == EpubImages.PNG) return PngGrayEncoder.png(gray, w, h)
+        val pixels = IntArray(w * h) { i ->
+            val v = gray[i].toInt() and 0xFF
+            (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+        }
+        val bitmap = Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
+        val out = ByteArrayOutputStream(120_000)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        bitmap.recycle()
+        return out.toByteArray()
+    }
+}
+
+/**
+ * Optimizer images: shrinks to fit the Picco's reading area (464 × 764) and converts to gray,
+ * keeping the format. Also replaces progressive JPEGs, which CrossPoint shows at 1/8 resolution.
+ */
 object AndroidGrayTranscoder : EpubOptimizer.ImageTranscoder {
     override fun transcode(name: String, bytes: ByteArray): ByteArray? {
+        val lower = name.lowercase()
+        // CrossPoint can't show WebP and the name can't change without rewriting the book, so leave it.
+        if (lower.endsWith(".webp")) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         val w = bounds.outWidth
         val h = bounds.outHeight
         if (w <= 0 || h <= 0) return null
-        val scale = min(1.0, min(480.0 / w, 800.0 / h))
+        val scale = min(1.0, min(PiccoEpub.WIDTH.toDouble() / w, PiccoEpub.HEIGHT.toDouble() / h))
         val tw = max(1, (w * scale).roundToInt())
         val th = max(1, (h * scale).roundToInt())
         var sample = 1
@@ -232,6 +310,7 @@ object AndroidGrayTranscoder : EpubOptimizer.ImageTranscoder {
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
             ?: return null
         val gray = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+        gray.eraseColor(android.graphics.Color.WHITE) // transparent areas become white, as on the Picco
         Canvas(gray).drawBitmap(
             decoded,
             null,
@@ -239,18 +318,16 @@ object AndroidGrayTranscoder : EpubOptimizer.ImageTranscoder {
             Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }) }
         )
         decoded.recycle()
-        val lower = name.lowercase()
-        val out = ByteArrayOutputStream()
-        val format = when {
-            lower.endsWith(".png") -> Bitmap.CompressFormat.PNG
-            lower.endsWith(".webp") -> Bitmap.CompressFormat.WEBP_LOSSY
-            else -> Bitmap.CompressFormat.JPEG
+        val result = if (lower.endsWith(".png")) {
+            val px = IntArray(tw * th)
+            gray.getPixels(px, 0, tw, 0, 0, tw, th)
+            PngGrayEncoder.png(ByteArray(px.size) { (px[it] and 0xFF).toByte() }, tw, th)
+        } else {
+            ByteArrayOutputStream().also { gray.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
         }
-        gray.compress(format, if (format == Bitmap.CompressFormat.PNG) 100 else 80, out)
         gray.recycle()
-        val result = out.toByteArray()
-        val shrunk = w > 480 || h > 800
-        // Keep the original if it already fits and the gray version isn't smaller.
-        return if (!shrunk && result.size >= bytes.size) null else result
+        val mustReplace = w > PiccoEpub.WIDTH || h > PiccoEpub.HEIGHT || EpubOptimizer.isProgressiveJpeg(bytes)
+        // Otherwise keep the original unless the gray version is smaller.
+        return if (!mustReplace && result.size >= bytes.size) null else result
     }
 }

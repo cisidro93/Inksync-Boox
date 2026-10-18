@@ -9,7 +9,8 @@ import java.nio.ByteOrder
  * section 1. All values little-endian.
  */
 object Xtc {
-    const val SPEC_VERSION = 1
+    /** Shared spec version (XTC layout itself is unchanged since version 1). */
+    const val SPEC_VERSION = PICCO_SPEC_VERSION
     const val WIDTH = 480
     const val HEIGHT = 800
 

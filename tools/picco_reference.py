@@ -8,13 +8,15 @@ produce byte-identical .xtc/.xtch files for the same decoded pixels and options.
 
     python3 tools/picco_reference.py
 
-Spec version: 1
+Spec version: 2 (adds the Picco EPUB output; XTC/XTCH output is unchanged from version 1)
 """
 import hashlib
 import struct
 
-SPEC_VERSION = 1
+SPEC_VERSION = 2
 SCREEN_W, SCREEN_H = 480, 800
+# Default CrossPoint 1.2 reading area on a 480 x 800 panel (margins and status bar removed).
+EPUB_W, EPUB_H = 464, 764
 
 GAMMA_LUT = [
     0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7, 8, 9, 9, 10, 11, 12, 13, 13, 14, 15, 16, 17, 18, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -138,11 +140,11 @@ def rotate_cw(img, w, h):
     return out, h, w
 
 
-def fit(img, rw, rh):
-    if SCREEN_W * rh <= SCREEN_H * rw:
-        dw, dh = SCREEN_W, max(1, (rh * SCREEN_W + rw // 2) // rw)
+def fit(img, rw, rh, tw=SCREEN_W, th=SCREEN_H):
+    if tw * rh <= th * rw:
+        dw, dh = tw, max(1, (rh * tw + rw // 2) // rw)
     else:
-        dw, dh = max(1, (rw * SCREEN_H + rh // 2) // rh), SCREEN_H
+        dw, dh = max(1, (rw * th + rh // 2) // rh), th
     if 2 * dw > 5 * rw:
         dw, dh = max(1, 5 * rw // 2), max(1, 5 * rh // 2)
     if dw * dh > rw * rh:
@@ -229,6 +231,15 @@ def compose(indices, dw, dh, two_bit):
     ox, oy = (SCREEN_W - dw) // 2, (SCREEN_H - dh) // 2
     for y in range(dh):
         canvas[(oy + y) * SCREEN_W + ox:(oy + y) * SCREEN_W + ox + dw] = indices[y * dw:(y + 1) * dw]
+    return canvas
+
+
+def compose_gray(img, dw, dh, tw, th):
+    """Smooth gray image centered on a white tw x th canvas (EPUB screens)."""
+    canvas = bytearray([255]) * (tw * th)
+    ox, oy = (tw - dw) // 2, (th - dh) // 2
+    for y in range(dh):
+        canvas[(oy + y) * tw + ox:(oy + y) * tw + ox + dw] = img[y * dw:(y + 1) * dw]
     return canvas
 
 
@@ -365,13 +376,25 @@ def _fixed(text, size):
     return raw + b"\0" * (size - len(raw))
 
 
-def render_page(gray, w, h, out, opts):
+def _region(gray, w, h, out, opts):
     crop = autocrop(gray, w, h) if opts["autocrop"] else (0, 0, w, h)
     rect = cell_rect(base_rect(crop, out["base"], opts["rtl"]), out["cell"], opts["rtl"])
     rw, rh = rect[2] - rect[0], rect[3] - rect[1]
     img = subimage(gray, w, rect)
     if opts["rotate"] and 5 * rw > 6 * rh:
         img, rw, rh = rotate_cw(img, rw, rh)
+    return img, rw, rh
+
+
+def render_epub_screen(gray, w, h, out, opts):
+    """EPUB screen: steps 1-6, then a smooth (undithered) 464 x 764 gray canvas."""
+    img, rw, rh = _region(gray, w, h, out, opts)
+    img, dw, dh = fit(img, rw, rh, EPUB_W, EPUB_H)
+    return compose_gray(levels_gamma(img), dw, dh, EPUB_W, EPUB_H)
+
+
+def render_page(gray, w, h, out, opts):
+    img, rw, rh = _region(gray, w, h, out, opts)
     img, dw, dh = fit(img, rw, rh)
     img = levels_gamma(img)
     idx = dither(img, dw, dh, opts["two_bit"], opts["dither"])
@@ -415,6 +438,33 @@ def export(pages, opts, title="", author=""):
     return b"".join(parts)
 
 
+def epub_screens(pages, opts):
+    """All EPUB screens (raw gray canvases) and the table of contents (title, first screen index)."""
+    sizes = [(w, h) for _, w, h in pages]
+    outputs, _ = plan(sizes, opts)
+    toc, screens, gray_cache = [], [], {}
+    for n, out in enumerate(outputs):
+        src = out["src"]
+        if not toc or toc[-1][2] != src:
+            toc.append(("Page %d" % (src + 1), n, src))
+        if src not in gray_cache:
+            gray_cache.clear()
+            argb, w, h = pages[src]
+            gray_cache[src] = (to_gray(argb, w, h), w, h)
+        gray, w, h = gray_cache[src]
+        screens.append(render_epub_screen(gray, w, h, out, opts))
+    return screens, [(t, i) for t, i, _ in toc]
+
+
+def epub_identifier(title, author, screen_count):
+    """Name-based book id for the Picco EPUB (spec section 9)."""
+    b = bytearray(hashlib.sha256(("inksync-picco\n%s\n%s\n%d" % (title, author, screen_count)).encode("utf-8")).digest()[:16])
+    b[6] = (b[6] & 0x0F) | 0x50
+    b[8] = (b[8] & 0x3F) | 0x80
+    h = b.hex()
+    return "urn:uuid:%s-%s-%s-%s-%s" % (h[:8], h[8:12], h[12:16], h[16:20], h[20:])
+
+
 # ---------------------------------------------------------------- fixtures
 
 def fixture_page(w, h, seed, mx, my):
@@ -443,6 +493,12 @@ FIXTURES = {
                                       dither="none", rotate=False, rtl=False),
 }
 
+# EPUB fixtures: SHA-256 of all screens' raw gray bytes concatenated (464 x 764 each), in order.
+EPUB_FIXTURES = {
+    "D_epub_panels_overview": dict(layout="panels_overview", autocrop=True, split_spreads=True, rotate=False, rtl=False),
+    "E_epub_whole_rotate_rtl": dict(layout="whole", autocrop=False, split_spreads=True, rotate=True, rtl=True),
+}
+
 
 def main():
     # Packing vectors from the spec.
@@ -456,6 +512,10 @@ def main():
     for name, opts in FIXTURES.items():
         data = export(pages, opts, title="Fixture")
         print(name, len(data), hashlib.sha256(data).hexdigest())
+    for name, opts in EPUB_FIXTURES.items():
+        screens, toc = epub_screens(pages, opts)
+        print(name, len(screens), "screens", hashlib.sha256(b"".join(screens)).hexdigest(), "toc", toc)
+    print("epub id", epub_identifier("Fixture", "", 11))
 
 
 if __name__ == "__main__":

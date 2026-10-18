@@ -40,7 +40,7 @@ class PiccoExportTest {
 
     private fun export(opts: PiccoOptions): ByteArray = runBlocking {
         val out = ByteArrayOutputStream()
-        PiccoExporter.export(pages, opts, "Fixture", "", out)
+        PiccoExporter.export(pages, opts, PiccoMeta("Fixture"), out)
         out.toByteArray()
     }
 
@@ -53,7 +53,7 @@ class PiccoExportTest {
     @Test
     fun `fixture A - 2-bit panels with overview`() {
         val data = export(
-            PiccoOptions(true, PiccoLayout.PANELS_OVERVIEW, autoCrop = true, splitSpreads = true,
+            PiccoOptions(PiccoFormat.XTCH, layout = PiccoLayout.PANELS_OVERVIEW, autoCrop = true, splitSpreads = true,
                 dither = PiccoDither.FLOYD_STEINBERG, rotateWide = false, rightToLeft = false)
         )
         assertEquals(1_056_954, data.size)
@@ -63,7 +63,7 @@ class PiccoExportTest {
     @Test
     fun `fixture B - 1-bit whole pages, Atkinson, right to left, rotated`() {
         val data = export(
-            PiccoOptions(false, PiccoLayout.WHOLE, autoCrop = false, splitSpreads = true,
+            PiccoOptions(PiccoFormat.XTC, layout = PiccoLayout.WHOLE, autoCrop = false, splitSpreads = true,
                 dither = PiccoDither.ATKINSON, rotateWide = true, rightToLeft = true)
         )
         assertEquals(192_400, data.size)
@@ -73,7 +73,7 @@ class PiccoExportTest {
     @Test
     fun `fixture C - 2-bit whole pages, no dithering, no spread split`() {
         val data = export(
-            PiccoOptions(true, PiccoLayout.WHOLE, autoCrop = true, splitSpreads = false,
+            PiccoOptions(PiccoFormat.XTCH, layout = PiccoLayout.WHOLE, autoCrop = true, splitSpreads = false,
                 dither = PiccoDither.NONE, rotateWide = false, rightToLeft = false)
         )
         assertEquals(288_362, data.size)
@@ -82,7 +82,7 @@ class PiccoExportTest {
 
     @Test
     fun `export is deterministic`() {
-        val opts = PiccoOptions(layout = PiccoLayout.PANELS)
+        val opts = PiccoOptions(format = PiccoFormat.XTCH, layout = PiccoLayout.PANELS)
         assertArrayEquals(export(opts), export(opts))
     }
 
@@ -103,5 +103,89 @@ class PiccoExportTest {
         val (_, w2, h2) = PiccoPipeline.fit(ByteArray(960 * 3200), 960, 3200)
         assertEquals(240, w2)
         assertEquals(800, h2)
+    }
+
+    // ---- Picco EPUB (spec section 9)
+
+    private val fixtureD = PiccoOptions(PiccoFormat.EPUB, layout = PiccoLayout.PANELS_OVERVIEW, autoCrop = true,
+        splitSpreads = true, rotateWide = false, rightToLeft = false)
+    private val fixtureE = PiccoOptions(PiccoFormat.EPUB, layout = PiccoLayout.WHOLE, autoCrop = false,
+        splitSpreads = true, rotateWide = true, rightToLeft = true)
+
+    /** All EPUB screens rendered directly, like the reference's epub_screens. */
+    private fun screens(opts: PiccoOptions): List<ByteArray> = runBlocking {
+        val sizes = (0 until pages.pageCount).map { pages.size(it) }
+        val plan = PiccoPlanner.plan(sizes, opts)
+        plan.pages.map { p ->
+            val (w, h) = sizes[p.source]
+            PiccoExporter.renderEpubScreen(PiccoPipeline.toGray(pages.decodeArgb(p.source), w, h), w, h, p, opts)
+        }
+    }
+
+    private fun concatHash(parts: List<ByteArray>): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        parts.forEach { md.update(it) }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    @Test
+    fun `fixture D - EPUB screens, panels with overview`() {
+        val s = screens(fixtureD)
+        assertEquals(11, s.size)
+        assertEquals("fd5485665ce2936cfc76cf9050aac18da4eaeb3f3193fcd61ad2f33669ae776a", concatHash(s))
+    }
+
+    @Test
+    fun `fixture E - EPUB screens, whole pages rotated right to left`() {
+        val s = screens(fixtureE)
+        assertEquals(4, s.size)
+        assertEquals("9f1f51e8524a4d926a61a0d19ae827422db5976c1bcde61b02afd1a4ca71428b", concatHash(s))
+    }
+
+    @Test
+    fun `EPUB table of contents matches the reference`() {
+        val sizes = runBlocking { (0 until pages.pageCount).map { pages.size(it) } }
+        val d = PiccoEpub.pagesOf(PiccoPlanner.plan(sizes, fixtureD)).map { it.first to it.second }
+        assertEquals(listOf(0 to 0, 1 to 3, 2 to 8), d)
+        val e = PiccoEpub.pagesOf(PiccoPlanner.plan(sizes, fixtureE)).map { it.first to it.second }
+        assertEquals(listOf(0 to 0, 1 to 1, 2 to 3), e)
+    }
+
+    @Test
+    fun `exported EPUB with PNG images decodes back to the fixture screens`() {
+        val out = ByteArrayOutputStream()
+        runBlocking {
+            PiccoExporter.export(pages, fixtureD.copy(epubImages = EpubImages.PNG), PiccoMeta("Fixture"), out, encoder = PngGrayEncoder)
+        }
+        val entries = PiccoEpubTest.unzip(out.toByteArray())
+        val images = entries.filterKeys { it.startsWith("OEBPS/images/") }.toSortedMap()
+        assertEquals(11, images.size)
+        val decoded = images.values.map { PiccoEpubTest.decodeGrayPng(it, PiccoEpub.WIDTH, PiccoEpub.HEIGHT) }
+        assertEquals("fd5485665ce2936cfc76cf9050aac18da4eaeb3f3193fcd61ad2f33669ae776a", concatHash(decoded))
+    }
+
+    @Test
+    fun `an unreadable page becomes a white screen instead of failing the export`() {
+        val broken = object : PiccoPageSource {
+            override val pageCount = 3
+            override suspend fun size(index: Int) = pages.size(index)
+            override suspend fun decodeArgb(index: Int): IntArray =
+                if (index == 1) throw IllegalStateException("corrupt") else pages.decodeArgb(index)
+        }
+        val failed = mutableListOf<Int>()
+        val out = ByteArrayOutputStream()
+        val plan = runBlocking {
+            PiccoExporter.export(broken, PiccoOptions(PiccoFormat.XTCH), PiccoMeta("Fixture"), out,
+                onPageFailed = { i, _ -> failed += i })
+        }
+        assertEquals(listOf(1), failed)
+        assertEquals(Xtc.fileSize(true, plan.pages.size, 0), out.size().toLong())
+    }
+
+    @Test
+    fun `EPUB fit targets the reading area`() {
+        val (_, dw, dh) = PiccoPipeline.fit(ByteArray(1000 * 1500), 1000, 1500, PiccoEpub.WIDTH, PiccoEpub.HEIGHT)
+        assertEquals(464, dw)
+        assertEquals(696, dh)
     }
 }

@@ -8,7 +8,7 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /**
- * Makes an EPUB lighter for the Picco (export spec, section 8): images larger than 480 × 800
+ * Makes an EPUB lighter for the Picco (export spec, section 8): images larger than 464 × 764 (the reading area)
  * are shrunk and converted to gray, everything else is copied unchanged, `mimetype` is written
  * first and uncompressed. DRM-protected books are refused.
  */
@@ -24,6 +24,30 @@ object EpubOptimizer {
     data class Result(val imagesChanged: Int, val bytesSaved: Long)
 
     private val IMAGE_EXT = listOf(".jpg", ".jpeg", ".png", ".webp")
+
+    /**
+     * True for a progressive JPEG (SOF2 frame), which CrossPoint shows at 1/8 resolution.
+     * Walks the marker segments up to the first frame header.
+     */
+    fun isProgressiveJpeg(bytes: ByteArray): Boolean {
+        if (bytes.size < 4 || bytes[0] != 0xFF.toByte() || bytes[1] != 0xD8.toByte()) return false
+        var i = 2
+        while (i + 3 < bytes.size) {
+            if (bytes[i] != 0xFF.toByte()) return false
+            val marker = bytes[i + 1].toInt() and 0xFF
+            when {
+                marker == 0xFF -> { i++; continue }
+                marker == 0xD8 || marker == 0x01 || marker in 0xD0..0xD7 -> { i += 2; continue }
+                marker == 0xC2 || marker == 0xC6 || marker == 0xCA || marker == 0xCE -> return true
+                marker in 0xC0..0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC -> return false
+                marker == 0xDA || marker == 0xD9 -> return false
+            }
+            val len = ((bytes[i + 2].toInt() and 0xFF) shl 8) or (bytes[i + 3].toInt() and 0xFF)
+            if (len < 2) return false
+            i += 2 + len
+        }
+        return false
+    }
 
     /** Font obfuscation algorithms that use encryption.xml without being DRM. */
     private val FONT_OBFUSCATION = listOf("http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC")

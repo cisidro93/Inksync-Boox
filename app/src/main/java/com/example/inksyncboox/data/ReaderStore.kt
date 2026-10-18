@@ -7,7 +7,9 @@ import com.example.inksyncboox.ink.NormalizedInkPoint
 import com.example.inksyncboox.ink.QuadTextHighlight
 import com.example.inksyncboox.neoflow.NormalizedRect
 import com.example.inksyncboox.study.UnifiedStudyCard
+import com.example.inksyncboox.picco.EpubImages
 import com.example.inksyncboox.picco.PiccoDither
+import com.example.inksyncboox.picco.PiccoFormat
 import com.example.inksyncboox.picco.PiccoLayout
 import com.example.inksyncboox.picco.PiccoOptions
 import com.example.inksyncboox.ui.main.TapLayout
@@ -146,7 +148,9 @@ class FileReaderStore(context: Context) : ReaderStore {
             darkGutter = o.optBoolean("darkGutter", d.darkGutter),
             picco = o.optJSONObject("picco")?.let { p ->
                 PiccoOptions(
-                    twoBit = p.optBoolean("twoBit", true),
+                    // Settings from before EPUB output had only "twoBit"; they move to the new default (EPUB).
+                    format = PiccoFormat.entries.firstOrNull { it.name == p.optString("format") } ?: PiccoFormat.EPUB,
+                    epubImages = EpubImages.entries.firstOrNull { it.name == p.optString("epubImages") } ?: EpubImages.JPEG,
                     layout = PiccoLayout.entries.firstOrNull { it.name == p.optString("layout") } ?: PiccoLayout.WHOLE,
                     autoCrop = p.optBoolean("autoCrop", true),
                     splitSpreads = p.optBoolean("splitSpreads", true),
@@ -175,7 +179,8 @@ class FileReaderStore(context: Context) : ReaderStore {
             .put(
                 "picco",
                 JSONObject()
-                    .put("twoBit", settings.picco.twoBit)
+                    .put("format", settings.picco.format.name)
+                    .put("epubImages", settings.picco.epubImages.name)
                     .put("layout", settings.picco.layout.name)
                     .put("autoCrop", settings.picco.autoCrop)
                     .put("splitSpreads", settings.picco.splitSpreads)

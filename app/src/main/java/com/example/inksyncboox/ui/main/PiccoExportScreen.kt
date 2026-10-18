@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,7 +15,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,6 +32,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,7 +41,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,7 +54,15 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.inksyncboox.data.DocKind
+import com.example.inksyncboox.pdf.BooxPdfEngine
+import com.example.inksyncboox.picco.BaseKind
+import com.example.inksyncboox.picco.EpubImages
 import com.example.inksyncboox.picco.PiccoDither
+import com.example.inksyncboox.picco.PiccoEpub
+import com.example.inksyncboox.picco.PiccoExporter
+import com.example.inksyncboox.picco.PiccoFormat
+import com.example.inksyncboox.picco.PiccoOptions
+import com.example.inksyncboox.picco.PiccoPipeline
 import com.example.inksyncboox.picco.PiccoGrid
 import com.example.inksyncboox.picco.PiccoJobState
 import com.example.inksyncboox.picco.PiccoJobs
@@ -62,13 +80,15 @@ import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * "Send to Picco": converts the open PDF or comic to CrossPoint's XTC/XTCH format (whole pages
- * or one panel per screen), or shrinks an EPUB's images, then saves, shares or sends it over Wi-Fi.
+ * "Send to Picco": converts the open PDF or comic to a Picco EPUB (default; works with BOOX Tiles)
+ * or CrossPoint's XTC/XTCH format, as whole pages or one panel per screen, or shrinks an EPUB's
+ * images. Then saves it, shares it (to BOOX Tiles or anywhere), or sends it over Wi-Fi to CrossPoint.
  */
 @Composable
 fun PiccoExportScreen(
     state: BooxReaderState,
     viewModel: MainScreenViewModel,
+    engine: BooxPdfEngine,
     onClose: () -> Unit
 ) {
     val doc = state.document ?: return
@@ -79,6 +99,29 @@ fun PiccoExportScreen(
     val isEpub = doc.kind == DocKind.EPUB
     val grid = PiccoGrid(state.gridPreset, state.traversalFlow, state.colSplitRatios, state.rowSplitRatios, state.customOverrides)
     var host by remember { mutableStateOf(state.settings.piccoHost) }
+    var showWifi by remember { mutableStateOf(!opts.isEpub) }
+
+    // Keep the screen on while converting or sending (they can take minutes on a long comic).
+    val view = LocalView.current
+    val keepAwake = job is PiccoJobState.Working || job is PiccoJobState.Sending
+    DisposableEffect(keepAwake) {
+        view.keepScreenOn = keepAwake
+        onDispose { view.keepScreenOn = false }
+    }
+
+    // Preview of the current page's output screens, rendered with the reader's open document.
+    var preview by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
+    var previewNote by remember { mutableStateOf<String?>(null) }
+    if (!isEpub) {
+        LaunchedEffect(opts, state.pageIndex, grid) {
+            previewNote = "Rendering preview…"
+            val result = withContext(Dispatchers.Default) {
+                runCatching { renderPreview(engine, state.pageIndex, opts, grid) }
+            }
+            preview = result.getOrDefault(emptyList())
+            previewNote = if (result.isFailure) "Preview unavailable for this page." else null
+        }
+    }
 
     val readyFile: File? = when (val j = job) {
         is PiccoJobState.Ready -> j.file
@@ -97,7 +140,7 @@ fun PiccoExportScreen(
                     context.contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } != null
                 }.getOrDefault(false)
             }
-            saveNote = if (ok) "Saved. Copy it to the Picco's SD card if you're not sending over Wi-Fi." else "Saving failed."
+            saveNote = if (ok) "Saved. Upload it at booxtiles.com, or copy it to the Picco over USB or its SD card." else "Saving failed."
         }
     }
 
@@ -147,7 +190,9 @@ fun PiccoExportScreen(
 
                 if (isEpub) {
                     Text(
-                        "Makes the book's images smaller (480 × 800) and gray so the Picco opens it quickly. Text and layout don't change.",
+                        "Makes the book's images fit the Picco's screen (464 × 764) and gray, and replaces progressive JPEGs " +
+                            "(which the Picco shows blurry), so the book opens quickly. Text and layout don't change. " +
+                            "Books without large images don't need this; send them as they are.",
                         color = EInkPureBlack, fontSize = 16.sp
                     )
                     EInkActionPill("Optimize for Picco", isSelected = true, onClick = {
@@ -155,9 +200,18 @@ fun PiccoExportScreen(
                     })
                 } else {
                     OptionRow("Format") {
-                        EInkActionPill("4 grays (.xtch)", opts.twoBit, { viewModel.updatePiccoOptions { it.copy(twoBit = true) } })
-                        EInkActionPill("Black & white (.xtc)", !opts.twoBit, { viewModel.updatePiccoOptions { it.copy(twoBit = false) } })
+                        PiccoFormat.entries.forEach { f ->
+                            EInkActionPill(f.label, opts.format == f, { viewModel.updatePiccoOptions { it.copy(format = f) } })
+                        }
                     }
+                    Text(
+                        if (opts.isEpub) {
+                            "Works with the Picco's own reader, the BOOX Tiles app and booxtiles.com. Each screen is a picture sized to the Picco's reading area."
+                        } else {
+                            "XTC files open in CrossPoint's reader. BOOX Tiles doesn't list them, so copy them to the SD card or send them over Wi-Fi."
+                        },
+                        color = EInkMutedText, fontSize = 14.sp
+                    )
                     OptionRow("Layout") {
                         PiccoLayout.entries.forEach { layout ->
                             EInkActionPill(layout.label, opts.layout == layout, { viewModel.updatePiccoOptions { it.copy(layout = layout) } })
@@ -173,9 +227,17 @@ fun PiccoExportScreen(
                             color = EInkMutedText, fontSize = 14.sp
                         )
                     }
-                    OptionRow("Dithering") {
-                        PiccoDither.entries.forEach { d ->
-                            EInkActionPill(d.label, opts.dither == d, { viewModel.updatePiccoOptions { it.copy(dither = d) } })
+                    if (opts.isEpub) {
+                        OptionRow("Images") {
+                            EpubImages.entries.forEach { im ->
+                                EInkActionPill(im.label, opts.epubImages == im, { viewModel.updatePiccoOptions { it.copy(epubImages = im) } })
+                            }
+                        }
+                    } else {
+                        OptionRow("Dithering") {
+                            PiccoDither.entries.forEach { d ->
+                                EInkActionPill(d.label, opts.dither == d, { viewModel.updatePiccoOptions { it.copy(dither = d) } })
+                            }
                         }
                     }
                     OptionRow("Page") {
@@ -187,6 +249,11 @@ fun PiccoExportScreen(
                         "Reading order: ${if (opts.rightToLeft) "right to left (manga)" else "left to right"}, from the reader's Display menu.",
                         color = EInkMutedText, fontSize = 14.sp
                     )
+                    Text(
+                        "Comics with a ComicInfo.xml get their title, series and author from it, and manga marked right-to-left is ordered that way.",
+                        color = EInkMutedText, fontSize = 14.sp
+                    )
+                    PreviewStrip(preview, previewNote, state.pageIndex, opts.isEpub)
                     estimate(state, opts, grid)?.let { (pages, bytes) ->
                         Text("About $pages screens, ${"%.1f".format(bytes / 1_048_576.0)} MB", color = EInkPureBlack, fontSize = 16.sp)
                     }
@@ -202,14 +269,41 @@ fun PiccoExportScreen(
                 JobStatus(job)
 
                 if (readyFile != null && !busy) {
+                    val readyIsEpub = readyFile.extension.equals("epub", ignoreCase = true)
+                    Text("Get it onto the Picco", color = EInkPureBlack, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (readyIsEpub) {
+                            "• Share… → BOOX Tiles (if the app is on this device), or any app that syncs to your phone.\n" +
+                                "• Or Save to device…, then upload it at booxtiles.com or copy it over USB / to the SD card.\n" +
+                                "Keep the same file name when you re-send a book so the Picco keeps your place."
+                        } else {
+                            "• Save to device… and copy it to the Picco's SD card, or\n" +
+                                "• Send over Wi-Fi below if the Picco runs CrossPoint's file transfer screen."
+                        },
+                        color = EInkMutedText, fontSize = 14.sp
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        EInkActionPill("Save to device…", false, { saveLauncher.launch(readyFile.name) })
                         EInkActionPill("Share…", false, { share(readyFile) })
+                        EInkActionPill("Save to device…", false, { saveLauncher.launch(readyFile.name) })
                     }
                     saveNote?.let { Text(it, color = EInkMutedText, fontSize = 14.sp) }
-                    Text("Send over Wi-Fi", color = EInkPureBlack, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    if (readyIsEpub) {
+                        Text(
+                            "On the Picco: keep portrait orientation and the default margins, and set the reader's image option to \"Display\" " +
+                                "so pictures aren't replaced by placeholders.",
+                            color = EInkMutedText, fontSize = 14.sp
+                        )
+                    }
+                    EInkActionPill(
+                        if (showWifi) "Hide Wi-Fi sending" else "Send over Wi-Fi (CrossPoint firmware)…",
+                        false,
+                        { showWifi = !showWifi }
+                    )
+                }
+                if (readyFile != null && !busy && showWifi) {
                     Text(
-                        "On the Picco, open its file transfer (Wi-Fi) screen and enter the address it shows. Files go to the ${if (isEpub) "Books" else "Comics"} folder.",
+                        "For Picco firmware with CrossPoint's file transfer screen: open it on the Picco, and enter the address it shows. " +
+                            "Files go to the ${if (readyFile.extension.equals("epub", true)) "Books" else "Comics"} folder.",
                         color = EInkMutedText, fontSize = 14.sp
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -236,7 +330,7 @@ fun PiccoExportScreen(
 
                 HorizontalDivider(thickness = 1.dp, color = EInkBorderGray)
                 Text(
-                    "Files work with the Picco's built-in reader and with CrossPoint; no firmware changes are needed. " +
+                    "No firmware changes are needed. " +
                         "Only DRM-free files can be converted. If you ever flash other firmware, back up the Picco first " +
                         "(esptool read_flash); Onyx says flashing may void the warranty.",
                     color = EInkMutedText, fontSize = 13.sp
@@ -301,7 +395,61 @@ private fun estimate(
     if (state.pageAspects.isEmpty()) return null
     val sizes = state.pageAspects.map { a -> (1000 * a.coerceAtLeast(0.05f)).roundToInt() to 1000 }
     val panels = grid.panels()
-    val plan = PiccoPlanner.plan(sizes, opts, panels?.let { p -> { _: Int, _: com.example.inksyncboox.picco.BaseKind -> p } })
+    val plan = PiccoPlanner.plan(sizes, opts, panels?.let { p -> { _: Int, _: BaseKind -> p } })
+    if (opts.isEpub) return plan.pages.size to PiccoEpub.estimateBytes(plan.pages.size, opts.epubImages)
     val chapters = if (opts.layout == PiccoLayout.WHOLE) 0 else plan.chapters.size
     return plan.pages.size to Xtc.fileSize(opts.twoBit, plan.pages.size, chapters)
+}
+
+/** Renders the output screens of one source page, as the Picco will get them. */
+private suspend fun renderPreview(engine: BooxPdfEngine, pageIndex: Int, opts: PiccoOptions, grid: PiccoGrid): List<ImageBitmap> {
+    val (w, h) = engine.exportPageSize(pageIndex)
+    val gray = PiccoPipeline.toGray(engine.exportPageArgb(pageIndex), w, h)
+    val panels = grid.panels()
+    val plan = PiccoPlanner.plan(listOf(w to h), opts, panels?.let { p -> { _: Int, _: BaseKind -> p } })
+    return plan.pages.take(12).map { page ->
+        val (pixels, pw, ph) = if (opts.isEpub) {
+            val canvas = PiccoExporter.renderEpubScreen(gray, w, h, page, opts)
+            Triple(IntArray(canvas.size) { i -> grayArgb(canvas[i].toInt() and 0xFF) }, PiccoEpub.WIDTH, PiccoEpub.HEIGHT)
+        } else {
+            val idx = PiccoExporter.renderPage(gray, w, h, page, opts)
+            val step = if (opts.twoBit) 85 else 255
+            Triple(IntArray(idx.size) { i -> grayArgb(idx[i] * step) }, Xtc.WIDTH, Xtc.HEIGHT)
+        }
+        Bitmap.createBitmap(pixels, pw, ph, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+}
+
+private fun grayArgb(v: Int): Int = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+
+@Composable
+private fun PreviewStrip(screens: List<ImageBitmap>, note: String?, pageIndex: Int, isEpub: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Preview of page ${pageIndex + 1}" + if (screens.isNotEmpty()) " (${screens.size} ${if (screens.size == 1) "screen" else "screens"})" else "",
+            color = EInkMutedText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+        )
+        if (note != null) Text(note, color = EInkMutedText, fontSize = 14.sp)
+        if (screens.isNotEmpty()) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                screens.forEach { img ->
+                    Image(
+                        bitmap = img,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .width(150.dp)
+                            .aspectRatio(img.width.toFloat() / img.height)
+                            .border(1.dp, EInkPureBlack),
+                        filterQuality = FilterQuality.Medium
+                    )
+                }
+            }
+            if (isEpub) {
+                Text("Smooth gray here; the Picco adds its own dithering when it shows each picture.", color = EInkMutedText, fontSize = 13.sp)
+            }
+        }
+    }
 }

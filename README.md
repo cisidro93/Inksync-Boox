@@ -46,22 +46,28 @@ Margin detection is ported from Aidoku's `CropBordersProcessor` (near-white and 
 
 ## Send to Picco
 
-For the BOOX Picco (3.97", 480 × 800, running Boox's fork of CrossPoint Reader), open a PDF or comic, tap the middle of the page, and choose **Picco**. The app converts it to CrossPoint's `.xtch` (4 grays) or `.xtc` (black and white) format:
+For the BOOX Picco (3.97", 480 × 800, running Boox's fork of CrossPoint Reader), open a PDF or comic, tap the middle of the page, and choose **Picco**.
 
+- **Picco EPUB** (default): each screen is a smooth gray picture sized exactly to the Picco's reading area (464 × 764), so the Picco shows it without rescaling and applies its own dithering. Because it's an ordinary EPUB, it works with the **BOOX Tiles** app, booxtiles.com, USB and the SD card. Cover, table of contents (one entry per original page) and, from a comic's `ComicInfo.xml`, title, series and author are included.
+- **XTCH / XTC**: CrossPoint's own pre-rendered format (4 grays or black and white, dithered on the phone/tablet). Faster page turns, but BOOX Tiles doesn't list it, so copy it to the SD card or send it over Wi-Fi.
 - **Whole pages** (spreads split into halves), **panels** (one panel per screen, so speech bubbles are readable on a 4" screen), or **panels with a page overview** first. Panels follow your tier grid; with no grid, each page is split in two.
-- Auto-crop, Floyd–Steinberg or Atkinson dithering (or none for crisp line art), optional rotation of wide panels, and manga order.
-- Each original page becomes a chapter, so the Picco's chapter menu can jump to it.
-- Save the file, share it, or **send it over Wi-Fi** to the Picco's file transfer screen (CrossPoint's `/upload` API).
-- For EPUBs, **Optimize for Picco** shrinks and grays the images so the Picco opens the book quickly.
+- Auto-crop, optional rotation of wide panels, manga order (also turned on by `ComicInfo.xml`), and Floyd–Steinberg / Atkinson / no dithering for XTC.
+- A **preview** of the current page's screens before converting, and a size estimate.
+- A page that can't be read becomes a blank screen (and is reported) instead of failing the export. The app checks free space first and keeps the screen on while working.
+- **Share** (to BOOX Tiles or any app), **Save**, or **send over Wi-Fi** to CrossPoint's file transfer screen (`/upload` API).
+- For EPUBs, **Optimize for Picco** shrinks and grays the images to 464 × 764 and replaces progressive JPEGs (which the Picco shows at 1/8 resolution).
 
-The format and every pixel step are defined in [`docs/picco-export-spec.md`](docs/picco-export-spec.md), shared with InkSync Pro (iOS). [`tools/picco_reference.py`](tools/picco_reference.py) is a reference implementation; the unit tests check that this app produces exactly its fixture files, byte for byte.
+On the Picco, keep portrait orientation, the default margins, and the image option set to "Display".
+
+The formats and every pixel step are defined in [`docs/picco-export-spec.md`](docs/picco-export-spec.md) (version 2), shared with InkSync Pro (iOS). [`tools/picco_reference.py`](tools/picco_reference.py) is a reference implementation; the unit tests check that this app reproduces its fixtures exactly (XTC files byte for byte, EPUB screens pixel for pixel).
 
 ## Limitations
 
 - EPUB: tables, SVG drawings and publisher CSS aren't rendered; DRM-protected books can't be opened.
 - Password-protected RAR/7z comics aren't supported.
 - The pen layer, refresh and comic unpacking need testing on a real Note Air 4C; none of it can be exercised in the emulator.
-- Picco files and Wi-Fi sending are built from CrossPoint's documented format and API but haven't been tried on a Picco yet; Boox's firmware fork may differ.
+- Picco files and Wi-Fi sending are built from CrossPoint 1.2's source (EPUB image layout, XTC format, upload API) but haven't been tried on a Picco yet; Boox's firmware fork may differ.
+- The EPUB optimizer leaves WebP images alone (the Picco can't show them, and renaming them would mean rewriting the book).
 
 ## Building
 

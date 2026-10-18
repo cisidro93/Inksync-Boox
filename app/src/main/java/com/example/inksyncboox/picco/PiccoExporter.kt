@@ -18,15 +18,39 @@ enum class PiccoDither(val label: String) {
     NONE("None (crisp lines)")
 }
 
+enum class PiccoFormat(val label: String, val extension: String) {
+    EPUB("Picco EPUB", "epub"),
+    XTCH("4 grays (.xtch)", "xtch"),
+    XTC("Black & white (.xtc)", "xtc")
+}
+
+enum class EpubImages(val label: String, val extension: String, val mediaType: String) {
+    JPEG("JPEG (smaller)", "jpg", "image/jpeg"),
+    PNG("PNG (lossless)", "png", "image/png")
+}
+
 /** Export options (docs/picco-export-spec.md, section 2). */
 data class PiccoOptions(
-    val twoBit: Boolean = true,
+    val format: PiccoFormat = PiccoFormat.EPUB,
+    val epubImages: EpubImages = EpubImages.JPEG,
     val layout: PiccoLayout = PiccoLayout.WHOLE,
     val autoCrop: Boolean = true,
     val splitSpreads: Boolean = true,
     val dither: PiccoDither = PiccoDither.FLOYD_STEINBERG,
     val rotateWide: Boolean = false,
     val rightToLeft: Boolean = false
+) {
+    val isEpub: Boolean get() = format == PiccoFormat.EPUB
+    /** XTCH (2-bit) vs XTC (1-bit); meaningless for EPUB. */
+    val twoBit: Boolean get() = format != PiccoFormat.XTC
+}
+
+/** Book details written into the file. */
+data class PiccoMeta(
+    val title: String,
+    val author: String = "",
+    val series: String? = null,
+    val seriesIndex: String? = null
 )
 
 /** A panel as a normalized rectangle (0..1) inside its page or half. */
@@ -158,17 +182,27 @@ object PiccoPlanner {
 
 object PiccoExporter {
 
-    /** Renders one output page to a 480 × 800 canvas of brightness indices. */
-    fun renderPage(gray: ByteArray, w: Int, h: Int, page: OutputPage, opts: PiccoOptions): ByteArray {
+    /** Steps 2–4: crop, region, rotate. */
+    private fun region(gray: ByteArray, w: Int, h: Int, page: OutputPage, opts: PiccoOptions): Triple<ByteArray, Int, Int> {
         val crop = if (opts.autoCrop) PiccoPipeline.autoCrop(gray, w, h) else intArrayOf(0, 0, w, h)
         val rect = PiccoPlanner.cellRect(PiccoPlanner.baseRect(crop, page.base, opts.rightToLeft), page.cell, opts.rightToLeft)
-        var rw = rect[2] - rect[0]
-        var rh = rect[3] - rect[1]
-        var img = PiccoPipeline.subImage(gray, w, rect)
-        if (opts.rotateWide && 5L * rw > 6L * rh) {
-            val (rot, nw, nh) = PiccoPipeline.rotateCw(img, rw, rh)
-            img = rot; rw = nw; rh = nh
-        }
+        val rw = rect[2] - rect[0]
+        val rh = rect[3] - rect[1]
+        val img = PiccoPipeline.subImage(gray, w, rect)
+        if (opts.rotateWide && 5L * rw > 6L * rh) return PiccoPipeline.rotateCw(img, rw, rh)
+        return Triple(img, rw, rh)
+    }
+
+    /** Renders one EPUB screen: a smooth gray 464 × 764 canvas (spec section 9). */
+    fun renderEpubScreen(gray: ByteArray, w: Int, h: Int, page: OutputPage, opts: PiccoOptions): ByteArray {
+        val (img, rw, rh) = region(gray, w, h, page, opts)
+        val (fitted, dw, dh) = PiccoPipeline.fit(img, rw, rh, PiccoEpub.WIDTH, PiccoEpub.HEIGHT)
+        return PiccoPipeline.composeGray(PiccoPipeline.levelsGamma(fitted), dw, dh, PiccoEpub.WIDTH, PiccoEpub.HEIGHT)
+    }
+
+    /** Renders one output page to a 480 × 800 canvas of brightness indices. */
+    fun renderPage(gray: ByteArray, w: Int, h: Int, page: OutputPage, opts: PiccoOptions): ByteArray {
+        val (img, rw, rh) = region(gray, w, h, page, opts)
         val (fitted, dw, dh) = PiccoPipeline.fit(img, rw, rh)
         val leveled = PiccoPipeline.levelsGamma(fitted)
         val indices = PiccoPipeline.dither(leveled, dw, dh, opts.twoBit, opts.dither)
@@ -176,41 +210,66 @@ object PiccoExporter {
     }
 
     /**
-     * Writes a complete .xtc/.xtch to [out]. Cancellable between pages; reports
+     * Writes a complete Picco EPUB, .xtc or .xtch to [out]. Cancellable between pages; reports
      * (pages done, total) through [onProgress]. Returns the plan (its pages are the position map).
+     *
+     * A page that fails to decode becomes a white page and is listed through [onPageFailed]
+     * instead of failing the whole export. [encoder] is used for EPUB screens.
      */
     suspend fun export(
         source: PiccoPageSource,
         opts: PiccoOptions,
-        title: String,
-        author: String,
+        meta: PiccoMeta,
         out: OutputStream,
         panelsFor: ((Int, BaseKind) -> List<NRect>?)? = null,
+        encoder: GrayImageEncoder = PngGrayEncoder,
+        onPageFailed: (Int, Throwable) -> Unit = { _, e -> throw e },
         onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): PiccoPlan {
         val sizes = (0 until source.pageCount).map { source.size(it) }
         val plan = PiccoPlanner.plan(sizes, opts, panelsFor)
-        val chapters = if (opts.layout == PiccoLayout.WHOLE) emptyList() else plan.chapters
-        val writer = XtcWriter(out, opts.twoBit, plan.pages.size, title, author, chapters)
+        val chapters = if (opts.layout == PiccoLayout.WHOLE && !opts.isEpub) emptyList() else plan.chapters
+        val epub = if (opts.isEpub) PiccoEpubWriter(out, plan, meta, opts.epubImages, encoder) else null
+        val xtc = if (opts.isEpub) null else XtcWriter(out, opts.twoBit, plan.pages.size, meta.title, meta.author, chapters)
         var cachedIndex = -1
-        var cachedGray = ByteArray(0)
+        var cachedGray: ByteArray? = null
         var cachedW = 0
         var cachedH = 0
         plan.pages.forEachIndexed { n, page ->
             currentCoroutineContext().ensureActive()
             if (page.source != cachedIndex) {
                 val (w, h) = sizes[page.source]
-                val argb = source.decodeArgb(page.source)
-                require(argb.size == w * h) { "Page ${page.source + 1} decoded to an unexpected size" }
-                cachedGray = PiccoPipeline.toGray(argb, w, h)
                 cachedIndex = page.source
                 cachedW = w
                 cachedH = h
+                cachedGray = try {
+                    val argb = source.decodeArgb(page.source)
+                    require(argb.size == w * h) { "Page ${page.source + 1} decoded to an unexpected size" }
+                    PiccoPipeline.toGray(argb, w, h)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: OutOfMemoryError) {
+                    onPageFailed(page.source, e); null
+                } catch (e: Exception) {
+                    onPageFailed(page.source, e); null
+                }
             }
-            writer.writePage(renderPage(cachedGray, cachedW, cachedH, page, opts))
+            val gray = cachedGray
+            if (epub != null) {
+                epub.writeScreen(
+                    if (gray == null) ByteArray(PiccoEpub.WIDTH * PiccoEpub.HEIGHT) { -1 }
+                    else renderEpubScreen(gray, cachedW, cachedH, page, opts)
+                )
+            } else {
+                xtc!!.writePage(
+                    if (gray == null) ByteArray(Xtc.WIDTH * Xtc.HEIGHT) { (if (opts.twoBit) 3 else 1).toByte() }
+                    else renderPage(gray, cachedW, cachedH, page, opts)
+                )
+            }
             onProgress(n + 1, plan.pages.size)
         }
-        writer.finish()
+        epub?.finish()
+        xtc?.finish()
         return plan.copy(chapters = chapters)
     }
 }

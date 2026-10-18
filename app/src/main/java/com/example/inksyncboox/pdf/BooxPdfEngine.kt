@@ -56,6 +56,11 @@ class BooxPdfEngine(
     var pageAspects: List<Float> = emptyList()
         private set
 
+    /** The comic's ComicInfo.xml (title, series, manga direction), if it has one. */
+    @Volatile
+    var comicInfoXml: String? = null
+        private set
+
     // Recently rendered regions (including preloaded ones), most recent last.
     private val renderCache = object : LinkedHashMap<String, Bitmap>(8, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?) = size > RENDER_CACHE_SIZE
@@ -123,6 +128,10 @@ class BooxPdfEngine(
                     zip.close()
                     error("No images found in this archive")
                 }
+                comicInfoXml = zip.entries().toList()
+                    .firstOrNull { !it.isDirectory && it.name.substringAfterLast('/').equals(ComicArchiveExtractor.COMIC_INFO, ignoreCase = true) }
+                    ?.takeIf { it.size in 0..1_000_000 }
+                    ?.let { e -> runCatching { zip.getInputStream(e).use { it.readBytes().decodeToString() } }.getOrNull() }
                 cbzZip = zip
                 cbzEntries = images
                 sourceKind = SourceKind.CBZ
@@ -143,6 +152,9 @@ class BooxPdfEngine(
                     cacheFile.delete() // pages are unpacked; the archive copy isn't needed
                 }
                 if (extracted.isEmpty()) error("No images found in this archive")
+                comicInfoXml = File(context.cacheDir, "comic-pages-$cacheTag/${ComicArchiveExtractor.COMIC_INFO}")
+                    .takeIf { it.isFile && it.length() < 1_000_000 }
+                    ?.let { runCatching { it.readText() }.getOrNull() }
                 extractedPages = extracted.keys
                     .sortedWith { a, b -> compareNaturalOrder(a, b) }
                     .map { extracted.getValue(it) }
@@ -391,6 +403,7 @@ class BooxPdfEngine(
         cbzZip = null
         cbzEntries = emptyList()
         extractedPages = emptyList()
+        comicInfoXml = null
         pageAspects = emptyList()
         renderCache.clear()
         contentBoundsCache.clear()

@@ -355,6 +355,7 @@ fun MainScreen(viewModel: MainScreenViewModel, modifier: Modifier = Modifier) {
                 PiccoExportScreen(
                     state = state,
                     viewModel = viewModel,
+                    engine = engine,
                     onClose = { showPicco = false; viewModel.requestFullRefresh() }
                 )
             }

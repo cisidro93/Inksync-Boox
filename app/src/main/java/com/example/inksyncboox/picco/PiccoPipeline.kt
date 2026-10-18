@@ -136,16 +136,16 @@ object PiccoPipeline {
         return Triple(out, h, w)
     }
 
-    /** Step 5: fit inside 480 × 800, enlarging at most 2.5×. */
-    fun fit(img: ByteArray, rw: Int, rh: Int): Triple<ByteArray, Int, Int> {
+    /** Step 5: fit inside tw × th (480 × 800 for XTC, 464 × 764 for EPUB), enlarging at most 2.5×. */
+    fun fit(img: ByteArray, rw: Int, rh: Int, tw: Int = Xtc.WIDTH, th: Int = Xtc.HEIGHT): Triple<ByteArray, Int, Int> {
         var dw: Int
         var dh: Int
-        if (Xtc.WIDTH.toLong() * rh <= Xtc.HEIGHT.toLong() * rw) {
-            dw = Xtc.WIDTH
-            dh = maxOf(1, ((rh.toLong() * Xtc.WIDTH + rw / 2) / rw).toInt())
+        if (tw.toLong() * rh <= th.toLong() * rw) {
+            dw = tw
+            dh = maxOf(1, ((rh.toLong() * tw + rw / 2) / rw).toInt())
         } else {
-            dh = Xtc.HEIGHT
-            dw = maxOf(1, ((rw.toLong() * Xtc.HEIGHT + rh / 2) / rh).toInt())
+            dh = th
+            dw = maxOf(1, ((rw.toLong() * th + rh / 2) / rh).toInt())
         }
         if (2L * dw > 5L * rw) {
             dw = maxOf(1, 5 * rw / 2)
@@ -251,6 +251,15 @@ object PiccoPipeline {
         val ox = (Xtc.WIDTH - dw) / 2
         val oy = (Xtc.HEIGHT - dh) / 2
         for (y in 0 until dh) System.arraycopy(indices, y * dw, canvas, (oy + y) * Xtc.WIDTH + ox, dw)
+        return canvas
+    }
+
+    /** EPUB: centers a smooth gray image on a white tw × th canvas. */
+    fun composeGray(img: ByteArray, dw: Int, dh: Int, tw: Int, th: Int): ByteArray {
+        val canvas = ByteArray(tw * th) { -1 }
+        val ox = (tw - dw) / 2
+        val oy = (th - dh) / 2
+        for (y in 0 until dh) System.arraycopy(img, y * dw, canvas, (oy + y) * tw + ox, dw)
         return canvas
     }
 }
