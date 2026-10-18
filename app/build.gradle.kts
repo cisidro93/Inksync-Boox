@@ -1,7 +1,6 @@
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
-  alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -36,6 +35,10 @@ android {
       resources {
         excludes += "/META-INF/{AL2.0,LGPL2.1}"
       }
+      // libarchive and the Onyx SDK can ship the same native helper libraries
+      jniLibs {
+        pickFirsts += "**/*.so"
+      }
     }
 }
 
@@ -53,7 +56,7 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
 
-  // Arch Components
+  // Lifecycle / ViewModel
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
 
@@ -77,8 +80,27 @@ dependencies {
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.espresso.core)
 
-  // Navigation
-  implementation(libs.androidx.navigation3.ui)
-  implementation(libs.androidx.navigation3.runtime)
-  implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+  // Lets the Boox e-ink refresh call reach Onyx's non-SDK View methods (Android hidden-API rules)
+  implementation(libs.hiddenapibypass)
+
+  // libarchive for CBR (RAR4/RAR5) and CB7 comics
+  implementation(libs.libarchive)
+
+  // Onyx Boox pen SDK (low-latency raw drawing). Exclusions match the Notable app's setup.
+  implementation(libs.onyxsdk.device) {
+    exclude(group = "com.android.support", module = "support-compat")
+  }
+  implementation(libs.onyxsdk.pen) {
+    exclude(group = "com.android.support", module = "support-compat")
+    exclude(group = "com.android.support", module = "appcompat-v7")
+    exclude(group = "com.onyx.android.sdk", module = "onyxsdk-geometry")
+    exclude(group = "com.tencent", module = "mmkv")
+  }
+  implementation(libs.onyxsdk.base) {
+    exclude(group = "com.android.support", module = "support-compat")
+    exclude(group = "com.android.support", module = "appcompat-v7")
+    exclude(group = "com.tencent", module = "mmkv")
+  }
+  implementation(libs.rxjava)
+  implementation(libs.rxandroid)
 }

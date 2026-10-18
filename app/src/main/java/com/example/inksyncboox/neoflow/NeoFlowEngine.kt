@@ -33,6 +33,14 @@ data class NormalizedRect(
         )
     }
 
+    /** Maps this rect, given in [outer]'s own 0..1 space, into the space [outer] lives in. */
+    fun mapInto(outer: NormalizedRect): NormalizedRect = NormalizedRect(
+        left = outer.left + left * (outer.right - outer.left),
+        top = outer.top + top * (outer.bottom - outer.top),
+        right = outer.left + right * (outer.right - outer.left),
+        bottom = outer.top + bottom * (outer.bottom - outer.top)
+    )
+
     /**
      * Converts between Android Top-Left Image Space and PDF Bottom-Left CropBox Space.
      */

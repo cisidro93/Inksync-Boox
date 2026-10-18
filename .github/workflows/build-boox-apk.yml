@@ -3,6 +3,7 @@ name: Build & Publish Boox E-Ink APK
 on:
   push:
     branches: [ main, master ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -29,11 +30,26 @@ jobs:
       - name: Setup Gradle with Cache
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run Unit Tests (NeoFlow & ViewModel Verification)
-        run: ./gradlew testDebugUnitTest
+      - name: Run Unit Tests
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest 2>&1 | tee build.log
 
-      - name: Assemble Debug & Release APKs for Boox Note Air 4C
-        run: ./gradlew assembleDebug
+      - name: Assemble Debug APK for Boox Note Air 4C
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug 2>&1 | tee -a build.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          # Surface Kotlin compiler errors and failed tests as annotations on the run / PR.
+          grep -E '^e: |FAILED|AssertionError|Exception' build.log | head -40 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+          # Gradle's explanation of the failure, as one annotation
+          msg=$(awk '/What went wrong:/{f=1} /\* Try:/{f=0} f' build.log | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+          [ -n "$msg" ] && echo "::error title=What went wrong::${msg}" || true
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -43,7 +59,7 @@ jobs:
 
       - name: Publish Latest Over-The-Air APK to GitHub Releases
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         with:
           tag_name: latest-boox
           name: "InkSync Boox · Latest Note Air 4C Build"
